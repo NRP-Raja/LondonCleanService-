@@ -1,0 +1,553 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CleanLondon | London's Trusted Domestic & Deep Cleaning Service</title>
+    <link rel="icon" type="image/jpeg" href="/static/logo.jpg">
+    <link rel="stylesheet" href="/static/style.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <!-- FontAwesome for UI icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body>
+
+    <!-- Demo Role Quick Switcher Bar -->
+    <div class="demo-bar">
+        <div class="demo-bar-inner">
+            <span class="demo-tag"><i class="fa-solid fa-wand-magic-sparkles"></i> Role Preview:</span>
+            <button class="role-btn active" data-role="customer" onclick="switchRole('customer')">
+                <i class="fa-solid fa-user"></i> Customer (Oliver)
+            </button>
+            <button class="role-btn" data-role="staff" onclick="switchRole('staff')">
+                <i class="fa-solid fa-spray-can-sparkles"></i> Staff (Elena)
+            </button>
+            <button class="role-btn" data-role="manager" onclick="switchRole('manager')">
+                <i class="fa-solid fa-chart-line"></i> Manager (Admin)
+            </button>
+            <span class="active-user-badge" id="current-user-display">Logged in as: Oliver Smith (Customer)</span>
+        </div>
+    </div>
+
+    <!-- Navigation Header -->
+    <header class="navbar">
+        <div class="nav-container">
+            <a href="#" class="brand-logo" onclick="switchView('landing')">
+                <img src="/static/logo.jpg" alt="CleanLondon Logo" class="brand-logo-img">
+                <span>Clean<strong>London</strong></span>
+            </a>
+
+            <nav class="nav-links">
+                <a href="#services-section" class="nav-item">Services</a>
+                <a href="#quote-section" class="nav-item">Instant Quote</a>
+                <a href="#reviews-section" class="nav-item">Reviews</a>
+                <a href="#" class="nav-item" id="nav-dashboard-link" onclick="handleDashboardClick()">My Dashboard</a>
+            </nav>
+
+            <div class="nav-actions">
+                <div class="trust-pill"><i class="fa-solid fa-shield-check"></i> £2M Insured</div>
+                <button class="btn btn-outline" id="auth-btn" onclick="toggleAuthModal()">Sign In</button>
+                <button class="btn btn-primary" onclick="scrollToQuote()">Book a Clean</button>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Content Containers -->
+    <main id="app-root">
+
+        <!-- 1. PUBLIC / CUSTOMER LANDING VIEW -->
+        <section id="landing-view" class="view-panel active">
+            <!-- Hero Banner -->
+            <div class="hero">
+                <div class="hero-content">
+                    <div class="badge-trust"><i class="fa-solid fa-award"></i> Voted London's #1 Most Reliable Cleaning Service</div>
+                    <h1>Brilliantly clean homes across London, <span class="text-emerald">effortlessly booked</span></h1>
+                    <p class="hero-subtext">Vetted, DBS-checked local cleaners. Dynamic upfront GBP (£) pricing. No hidden agency contracts.</p>
+
+                    <div class="trust-metric-row">
+                        <div class="metric"><i class="fa-solid fa-star text-gold"></i> <strong>4.9/5</strong> on Trustpilot</div>
+                        <div class="metric"><i class="fa-solid fa-user-shield text-emerald"></i> 100% DBS-Checked</div>
+                        <div class="metric"><i class="fa-solid fa-repeat text-indigo"></i> Rebook the same cleaner</div>
+                    </div>
+                </div>
+
+                <!-- Instant Dynamic Quote Card -->
+                <div class="hero-card" id="quote-section">
+                    <div class="card-header">
+                        <h3><i class="fa-solid fa-calculator text-emerald"></i> Calculate Your London Clean</h3>
+                        <p>Real-time dynamic estimate based on your home</p>
+                    </div>
+
+                    <form id="quote-form" onsubmit="handleQuoteSubmit(event)">
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-location-dot"></i> London Postcode</label>
+                            <div class="input-with-button">
+                                <input type="text" id="quote-postcode" placeholder="e.g. SW1A, E1, NW1" value="SW1A 1AA" required>
+                                <button type="button" class="btn-sm btn-ghost" onclick="lookupPostcodeArea()"><i class="fa-solid fa-magnifying-glass"></i> Check</button>
+                            </div>
+                            <span class="field-hint" id="postcode-status">Coverage: All London Zones 1-6</span>
+                        </div>
+
+                        <div class="form-group">
+                            <label><i class="fa-solid fa-broom"></i> Service Required</label>
+                            <select id="quote-service" onchange="recalculateQuote()">
+                                <option value="1">Regular Domestic Clean (£35 base + £12/bed)</option>
+                                <option value="2">Deep Spring Refresh (£65 base + £20/bed)</option>
+                                <option value="3">End of Tenancy Guarantee (£110 base + £30/bed)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-row-2">
+                            <div class="form-group">
+                                <label><i class="fa-solid fa-bed"></i> Bedrooms</label>
+                                <div class="stepper">
+                                    <button type="button" onclick="adjustCount('bedrooms', -1)">-</button>
+                                    <span id="bedrooms-val">2</span>
+                                    <button type="button" onclick="adjustCount('bedrooms', 1)">+</button>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label><i class="fa-solid fa-bath"></i> Bathrooms</label>
+                                <div class="stepper">
+                                    <button type="button" onclick="adjustCount('bathrooms', -1)">-</button>
+                                    <span id="bathrooms-val">1</span>
+                                    <button type="button" onclick="adjustCount('bathrooms', 1)">+</button>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="checkbox-options">
+                            <label class="custom-checkbox">
+                                <input type="checkbox" id="quote-pets" onchange="recalculateQuote()">
+                                <span>I have indoor pets (+£10 pet care)</span>
+                            </label>
+                            <label class="custom-checkbox">
+                                <input type="checkbox" id="quote-deep" onchange="recalculateQuote()">
+                                <span>Add oven & appliance detailing (+£25)</span>
+                            </label>
+                        </div>
+
+                        <!-- Dynamic Price Output Box -->
+                        <div class="quote-summary-box">
+                            <div class="quote-price-label">Estimated Total (Inc. VAT)</div>
+                            <div class="quote-price" id="quote-price-display">£58.50</div>
+                            <div class="quote-meta" id="quote-meta-display">Estimated ~3.0 hrs • £19.50/hr</div>
+                        </div>
+
+                        <button type="button" class="btn btn-primary btn-block" onclick="openBookingModal()">
+                            Proceed to Slot & Booking <i class="fa-solid fa-arrow-right"></i>
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <!-- Value Props & Features -->
+            <section class="features-section" id="services-section">
+                <div class="section-title">
+                    <h2>Why thousands of Londoners trust CleanLondon</h2>
+                    <p>Designed with British standards of punctuality, privacy, and security</p>
+                </div>
+
+                <div class="grid-3">
+                    <div class="feature-card">
+                        <div class="icon-bubble"><i class="fa-solid fa-key"></i></div>
+                        <h3>Safe Key Handling</h3>
+                        <p>Full UK GDPR compliance. Choose meet-in-person, 24/7 concierge handover, or insured key safe box release.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon-bubble"><i class="fa-solid fa-leaf"></i></div>
+                        <h3>Eco-Friendly Cleaning</h3>
+                        <p>Plant-based, allergen-free cleaning solutions safe for toddlers and pets at zero extra charge.</p>
+                    </div>
+                    <div class="feature-card">
+                        <div class="icon-bubble"><i class="fa-solid fa-id-card-clip"></i></div>
+                        <h3>Strict DBS & Identity Checks</h3>
+                        <p>Every cleaner passes strict criminal history checks, right-to-work verification, and hands-on trial cleaning.</p>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Customer Reviews Section -->
+            <section class="reviews-section" id="reviews-section">
+                <div class="section-title">
+                    <h2>Real feedback from real Londoners</h2>
+                    <p>Verified bookings only</p>
+                </div>
+
+                <div class="reviews-grid">
+                    <div class="review-card">
+                        <div class="review-stars">★★★★★</div>
+                        <p class="review-text">"Elena arrived promptly in Victoria and left our 2-bed flat completely sparkling. The kitchen sink and oven look brand new. Cannot recommend enough!"</p>
+                        <div class="reviewer-meta">
+                            <strong>Oliver S.</strong> • Westminster (SW1H)
+                        </div>
+                    </div>
+                    <div class="review-card">
+                        <div class="review-stars">★★★★★</div>
+                        <p class="review-text">"The live status tracking is brilliant. Seeing when Marcus was en route and finished gave me total peace of mind while working in Shoreditch."</p>
+                        <div class="reviewer-meta">
+                            <strong>Sophia P.</strong> • Spitalfields (E1)
+                        </div>
+                    </div>
+                    <div class="review-card">
+                        <div class="review-stars">★★★★★</div>
+                        <p class="review-text">"Our landlord inspected after the End of Tenancy clean and refunded our full deposit within 24 hours. Well worth every penny."</p>
+                        <div class="reviewer-meta">
+                            <strong>James H.</strong> • Camden (NW1)
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </section>
+
+        <!-- 2. CUSTOMER DASHBOARD VIEW -->
+        <section id="customer-dashboard-view" class="view-panel">
+            <div class="dashboard-header">
+                <div>
+                    <h2>Welcome back, <span id="customer-greeting-name">Oliver</span>!</h2>
+                    <p>Manage your upcoming appointments and leave reviews</p>
+                </div>
+                <button class="btn btn-primary" onclick="scrollToQuote()"><i class="fa-solid fa-plus"></i> Book Another Clean</button>
+            </div>
+
+            <div class="dashboard-content">
+                <div class="bookings-table-card">
+                    <div class="card-header">
+                        <h3><i class="fa-solid fa-calendar-check"></i> My Cleaning Bookings</h3>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Ref #</th>
+                                    <th>Service</th>
+                                    <th>Date & Time</th>
+                                    <th>Address</th>
+                                    <th>Cleaner</th>
+                                    <th>Price</th>
+                                    <th>Status</th>
+                                    <th>Action</th>
+                                </tr>
+                            </thead>
+                            <tbody id="customer-bookings-list">
+                                <!-- Populated dynamically by app.js -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 3. STAFF / CLEANER DASHBOARD VIEW -->
+        <section id="staff-dashboard-view" class="view-panel">
+            <div class="dashboard-header">
+                <div>
+                    <h2>Cleaner Operations Dashboard</h2>
+                    <p>Logged in as: <strong id="staff-profile-name">Elena Petrova</strong> (Base: SE1 7PB Southwark)</p>
+                </div>
+                <div class="staff-badge-status">
+                    <span class="status-indicator online"></span> Available for Dispatch
+                </div>
+            </div>
+
+            <div class="staff-grid">
+                <!-- Assigned Jobs Column -->
+                <div class="staff-jobs-column">
+                    <div class="bookings-table-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-list-check"></i> My Assigned London Jobs</h3>
+                        </div>
+                        <div id="staff-jobs-container" class="job-card-list">
+                            <!-- Populated dynamically by app.js -->
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Live Map & Transit Route Simulation Column -->
+                <div class="staff-map-column">
+                    <div class="map-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-map-location-dot"></i> Job Location & Route Map</h3>
+                            <span class="badge-mock" id="map-mode-badge"><i class="fa-solid fa-satellite"></i> Mock GPS Mode</span>
+                        </div>
+                        <div class="interactive-map-mock" id="map-canvas">
+                            <div class="map-overlay-info" id="map-active-job-info">
+                                <h4>Select a job to view location</h4>
+                                <p>Shows route, key access instructions, and customer contact</p>
+                            </div>
+                            <div class="london-schematic-bg">
+                                <div class="map-marker cleaner-marker" title="Your Location">
+                                    <i class="fa-solid fa-person-walking"></i>
+                                    <span>You (SE1)</span>
+                                </div>
+                                <div class="map-marker job-marker" id="job-pin" title="Active Booking Pin">
+                                    <i class="fa-solid fa-house-chimney"></i>
+                                    <span id="pin-postcode-text">SW1H 0EU</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="map-transit-details" id="transit-summary">
+                            <i class="fa-solid fa-train-subway"></i> <strong>TfL Transit:</strong> ~18 mins via Jubilee & Northern Lines to job location.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- 4. MANAGER (ADMIN) DASHBOARD VIEW -->
+        <section id="manager-dashboard-view" class="view-panel">
+            <div class="dashboard-header">
+                <div>
+                    <h2>CleanLondon Executive Operations</h2>
+                    <p>Real-time London dispatch, cleaner utilization, and revenue performance</p>
+                </div>
+                <div class="header-actions">
+                    <button class="btn btn-outline" onclick="loadManagerData()"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                </div>
+            </div>
+
+            <!-- KPI Summary Cards -->
+            <div class="kpi-grid">
+                <div class="kpi-card">
+                    <div class="kpi-icon emerald"><i class="fa-solid fa-sterling-sign"></i></div>
+                    <div class="kpi-details">
+                        <span class="kpi-title">Daily Revenue (Today)</span>
+                        <h3 class="kpi-value" id="kpi-daily-rev">£88.00</h3>
+                        <span class="kpi-trend positive"><i class="fa-solid fa-arrow-up"></i> +14% vs yesterday</span>
+                    </div>
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-icon indigo"><i class="fa-solid fa-calendar-days"></i></div>
+                    <div class="kpi-details">
+                        <span class="kpi-title">Gross Platform Revenue</span>
+                        <h3 class="kpi-value" id="kpi-monthly-rev">£336.50</h3>
+                        <span class="kpi-trend">All active bookings</span>
+                    </div>
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-icon amber"><i class="fa-solid fa-users-gear"></i></div>
+                    <div class="kpi-details">
+                        <span class="kpi-title">Staff Utilization</span>
+                        <h3 class="kpi-value" id="kpi-utilization">50.0%</h3>
+                        <span class="kpi-trend"><span id="kpi-active-cleaners">1</span> of 2 Cleaners Active</span>
+                    </div>
+                </div>
+
+                <div class="kpi-card">
+                    <div class="kpi-icon rose"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                    <div class="kpi-details">
+                        <span class="kpi-title">Unassigned Bookings</span>
+                        <h3 class="kpi-value" id="kpi-unassigned-count">1</h3>
+                        <span class="kpi-trend">Requires Dispatch</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Dispatch Operations Table -->
+            <div class="bookings-table-card">
+                <div class="card-header space-between">
+                    <h3><i class="fa-solid fa-truck-fast"></i> Dispatch Console & Job Allocation</h3>
+                    <div class="filter-group">
+                        <label>Filter Status:</label>
+                        <select id="manager-status-filter" onchange="loadManagerData()">
+                            <option value="ALL">All Statuses</option>
+                            <option value="SCHEDULED">Scheduled</option>
+                            <option value="EN_ROUTE">En Route</option>
+                            <option value="IN_PROGRESS">In Progress</option>
+                            <option value="COMPLETED">Completed</option>
+                        </select>
+                    </div>
+                </div>
+
+                <div class="table-responsive">
+                    <table class="data-table">
+                        <thead>
+                            <tr>
+                                <th>Ref #</th>
+                                <th>Customer</th>
+                                <th>Postcode</th>
+                                <th>Service</th>
+                                <th>Date & Slot</th>
+                                <th>Value</th>
+                                <th>Status</th>
+                                <th>Assigned Cleaner</th>
+                                <th>Action</th>
+                            </tr>
+                        </thead>
+                        <tbody id="manager-bookings-list">
+                            <!-- Populated dynamically by app.js -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal: Customer Booking Form -->
+    <div class="modal-overlay" id="booking-modal">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-calendar-plus text-emerald"></i> Complete Your Booking</h3>
+                <button class="modal-close" onclick="closeBookingModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="create-booking-form" onsubmit="submitNewBooking(event)">
+                    <div class="form-group">
+                        <label>Street Address Line 1 *</label>
+                        <input type="text" id="book-address1" placeholder="e.g. Flat 12, 100 Oxford Street" required>
+                    </div>
+                    <div class="form-row-2">
+                        <div class="form-group">
+                            <label>Address Line 2 (Optional)</label>
+                            <input type="text" id="book-address2" placeholder="e.g. Soho">
+                        </div>
+                        <div class="form-group">
+                            <label>London Postcode *</label>
+                            <input type="text" id="book-postcode" value="SW1A 1AA" required>
+                        </div>
+                    </div>
+
+                    <div class="form-row-2">
+                        <div class="form-group">
+                            <label>Cleaning Date *</label>
+                            <input type="date" id="book-date" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Preferred Time Window *</label>
+                            <select id="book-timeslot">
+                                <option value="08:00 - 11:00">Morning (08:00 - 11:00)</option>
+                                <option value="11:30 - 14:30">Midday (11:30 - 14:30)</option>
+                                <option value="15:00 - 18:00">Afternoon (15:00 - 18:00)</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Key Handover & Property Access *</label>
+                        <select id="book-key-handling">
+                            <option value="MEET_IN_PERSON">I will be home to open the door (Meet in Person)</option>
+                            <option value="CONCIERGE">Leave key with 24/7 Building Concierge / Porter</option>
+                            <option value="KEY_SAFE_BOX">Key Safe Box (Provide code in notes)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group">
+                        <label>Special Access Notes / Key Codes</label>
+                        <textarea id="book-access-notes" rows="2" placeholder="e.g. Gate code #1234, please do not disturb the home office."></textarea>
+                    </div>
+
+                    <div class="modal-price-box">
+                        <span>Total Payable Upon Completion:</span>
+                        <strong id="modal-total-display">£58.50</strong>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-block">Confirm Booking & Reserve Slot</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Review Submission -->
+    <div class="modal-overlay" id="review-modal">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-star text-gold"></i> Review Your Cleaner</h3>
+                <button class="modal-close" onclick="closeReviewModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="submit-review-form" onsubmit="submitReview(event)">
+                    <input type="hidden" id="review-booking-id">
+                    <div class="form-group text-center">
+                        <label>Overall Rating</label>
+                        <div class="star-rating-input">
+                            <span class="star-opt active" onclick="setRating(1)">★</span>
+                            <span class="star-opt active" onclick="setRating(2)">★</span>
+                            <span class="star-opt active" onclick="setRating(3)">★</span>
+                            <span class="star-opt active" onclick="setRating(4)">★</span>
+                            <span class="star-opt active" onclick="setRating(5)">★</span>
+                        </div>
+                        <input type="hidden" id="review-stars-val" value="5">
+                    </div>
+
+                    <div class="form-group">
+                        <label>How did your cleaner perform?</label>
+                        <textarea id="review-comment" rows="3" placeholder="Elena did a wonderful job with the kitchen and floors..." required></textarea>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-block">Submit Verified Review</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal: Auth / Sign In / Google OAuth -->
+    <div class="modal-overlay" id="auth-modal">
+        <div class="modal-dialog auth-dialog">
+            <div class="modal-header">
+                <h3>Sign in to CleanLondon</h3>
+                <button class="modal-close" onclick="toggleAuthModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Google 1-Click Button Prototype -->
+                <button type="button" class="btn-google-login" onclick="triggerGoogleSignIn()">
+                    <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google">
+                    Continue with Google
+                </button>
+
+                <div class="separator"><span>or sign in with email</span></div>
+
+                <form id="login-form" onsubmit="handleManualLogin(event)">
+                    <div class="form-group">
+                        <label>Email Address</label>
+                        <input type="email" id="login-email" value="oliver.smith@example.co.uk" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Password</label>
+                        <input type="password" id="login-password" value="Password123!" required>
+                    </div>
+                    <button type="submit" class="btn btn-primary btn-block">Sign In</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <div class="footer-container">
+            <div class="footer-col">
+                <div class="brand-logo footer-logo">
+                    <img src="/static/logo.jpg" alt="CleanLondon Logo" class="brand-logo-img footer-logo-img">
+                    <span>Clean<strong>London</strong></span>
+                </div>
+                <p>The premium domestic cleaning platform across all London boroughs. Insured, certified, and vetted.</p>
+                <p class="copyright">© 2026 CleanLondon Ltd. Registered in England & Wales #10928412.</p>
+            </div>
+            <div class="footer-col">
+                <h4>Coverage Areas</h4>
+                <ul>
+                    <li>Central London (SW1, W1, EC1, WC1)</li>
+                    <li>East London (E1, E14, Hackney)</li>
+                    <li>North London (NW1, Islington, N1)</li>
+                    <li>South London (SE1, Clapham, Wandsworth)</li>
+                </ul>
+            </div>
+            <div class="footer-col">
+                <h4>Security & Standards</h4>
+                <ul>
+                    <li>UK GDPR & DPA 2018 Compliant</li>
+                    <li>Enhanced DBS Inspected Staff</li>
+                    <li>Key Handover Insurance Policy</li>
+                    <li>256-Bit Encrypted Data Storage</li>
+                </ul>
+            </div>
+        </div>
+    </footer>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>
