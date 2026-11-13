@@ -46,6 +46,11 @@ services:
       - GOOGLE_CLIENT_SECRET=mock-google-client-secret
       - GOOGLE_MAPS_API_KEY=MOCK_GOOGLE_MAPS_KEY_LONDON
       - MOCK_MODE=true
+      - STRIPE_SECRET_KEY=sk_test_mockCleanLondonKey2026
+      - STRIPE_PUBLISHABLE_KEY=pk_test_mockCleanLondonPubKey2026
+      - STRIPE_WEBHOOK_SECRET=whsec_mockWebhookSecret2026
+      - STRIPE_SUCCESS_URL=http://localhost:8000/static/success.html?session_id={CHECKOUT_SESSION_ID}
+      - STRIPE_CANCEL_URL=http://localhost:8000/static/cancel.html
     volumes:
       - .:/app
     networks:

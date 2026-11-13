@@ -546,13 +546,41 @@ async function submitNewBooking(e) {
         const data = await res.json();
         if (res.ok) {
             closeBookingModal();
-            alert(`🎉 Booking Confirmed! Ref: ${data.reference_code}. Total: £${data.total_price_gbp.toFixed(2)}`);
-            applyAuthenticatedView();
+            // Automatically launch Stripe Hosted Checkout for the customer
+            await initiateStripeCheckout(data.booking_id);
         } else {
             alert(`Booking Error: ${data.detail || "Could not complete booking"}`);
         }
     } catch (err) {
         alert("Booking submission failed. Please try again.");
+    }
+}
+
+/**
+ * Initiates Stripe Hosted Checkout Session and redirects user
+ */
+async function initiateStripeCheckout(bookingId) {
+    try {
+        const payRes = await fetch(`${API_BASE}/api/payments/create-checkout-session`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${state.token}`
+            },
+            body: JSON.stringify({ booking_id: parseInt(bookingId) })
+        });
+        const payData = await payRes.json();
+        if (payRes.ok && payData.checkout_url) {
+            // Secure Redirect to Stripe Hosted Checkout
+            window.location.href = payData.checkout_url;
+        } else {
+            alert(`Payment initialization failed: ${payData.detail || "Unable to reach Stripe"}`);
+            applyAuthenticatedView();
+        }
+    } catch (err) {
+        console.error("Stripe Checkout error:", err);
+        alert("Payment gateway error. Please try again from your dashboard.");
+        applyAuthenticatedView();
     }
 }
 
@@ -574,13 +602,19 @@ async function loadCustomerBookings() {
 
             listBody.innerHTML = data.bookings.map(b => {
                 let actionBtn = "";
-                if (b.status === "COMPLETED" && !b.review_rating) {
+                if (b.payment_status === "PENDING") {
+                    actionBtn = `<button class="btn btn-sm btn-primary" onclick="initiateStripeCheckout(${b.id})" style="background:#635bff; border-color:#635bff;"><i class="fa-brands fa-stripe"></i> Pay £${parseFloat(b.total_price_gbp).toFixed(2)}</button>`;
+                } else if (b.status === "COMPLETED" && !b.review_rating) {
                     actionBtn = `<button class="btn btn-sm btn-primary" onclick="openReviewModal(${b.id})"><i class="fa-solid fa-star"></i> Review</button>`;
                 } else if (b.review_rating) {
                     actionBtn = `<span class="text-gold">★ ${b.review_rating}/5 Rated</span>`;
                 } else {
-                    actionBtn = `<span class="text-muted"><i class="fa-solid fa-clock"></i> Active</span>`;
+                    actionBtn = `<span class="badge-paid" style="background:#dcfce7; color:#15803d; font-size:0.75rem; padding:4px 8px; border-radius:12px; font-weight:700;"><i class="fa-solid fa-shield-check"></i> Paid</span>`;
                 }
+
+                const paymentBadge = b.payment_status === "PAID" 
+                    ? `<span style="color:#15803d; font-weight:700;"><i class="fa-solid fa-check"></i> Paid</span>`
+                    : `<span style="color:#b45309; font-weight:700;"><i class="fa-solid fa-clock"></i> Pending</span>`;
 
                 return `
                     <tr>
@@ -589,7 +623,7 @@ async function loadCustomerBookings() {
                         <td>${b.scheduled_date}<br><small class="text-muted">${b.scheduled_time_slot}</small></td>
                         <td>${b.address_line1}, ${b.postcode}</td>
                         <td>${b.staff_name ? b.staff_name : '<em class="text-muted">Allocating...</em>'}</td>
-                        <td><strong>£${parseFloat(b.total_price_gbp).toFixed(2)}</strong></td>
+                        <td><strong>£${parseFloat(b.total_price_gbp).toFixed(2)}</strong><br><small>${paymentBadge}</small></td>
                         <td><span class="status-badge ${b.status}">${b.status.replace('_', ' ')}</span></td>
                         <td>${actionBtn}</td>
                     </tr>

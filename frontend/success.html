@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Successful | CleanLondon</title>
+    <link rel="icon" type="image/jpeg" href="/static/logo.jpg">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .payment-container {
+            max-width: 600px;
+            margin: 60px auto;
+            padding: 0 20px;
+        }
+        .payment-card {
+            background: #ffffff;
+            border-radius: var(--radius-lg);
+            padding: 36px;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+            text-align: center;
+        }
+        .success-icon-bubble {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            background: #dcfce7;
+            color: #16a34a;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            margin-bottom: 20px;
+        }
+        .receipt-box {
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            padding: 20px;
+            margin: 24px 0;
+            text-align: left;
+            font-size: 0.9rem;
+        }
+        .receipt-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 8px 0;
+            border-bottom: 1px dashed #e2e8f0;
+        }
+        .receipt-row:last-child {
+            border-bottom: none;
+            padding-top: 12px;
+            font-size: 1.1rem;
+            font-weight: 800;
+            color: var(--navy);
+        }
+        .badge-paid {
+            background: #dcfce7;
+            color: #15803d;
+            font-weight: 700;
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 0.75rem;
+        }
+    </style>
+</head>
+<body>
+    <!-- Navbar Header -->
+    <header class="navbar" style="top: 0;">
+        <div class="nav-container">
+            <a href="/" class="brand-logo">
+                <img src="/static/logo.jpg" alt="CleanLondon Logo" class="brand-logo-img">
+                <span>Clean<strong>London</strong></span>
+            </a>
+            <div class="trust-pill"><i class="fa-brands fa-stripe" style="font-size:1.4rem; vertical-align:middle; color:#635bff;"></i> Stripe Verified</div>
+        </div>
+    </header>
+
+    <main class="payment-container">
+        <div class="payment-card">
+            <div class="success-icon-bubble">
+                <i class="fa-solid fa-check"></i>
+            </div>
+            <h2>Payment Successful!</h2>
+            <p style="color: var(--text-muted); margin-top: 6px;">
+                Thank you for choosing CleanLondon. Your domestic cleaning slot is officially confirmed.
+            </p>
+
+            <div class="receipt-box" id="receipt-details">
+                <div style="text-align:center; padding: 20px;" id="loading-spinner">
+                    <i class="fa-solid fa-spinner fa-spin text-emerald"></i> Fetching verified Stripe receipt...
+                </div>
+            </div>
+
+            <div style="display: flex; gap: 12px; justify-content: center;">
+                <a href="/" class="btn btn-primary" style="padding: 12px 24px;">
+                    <i class="fa-solid fa-house"></i> Return to Dashboard
+                </a>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        document.addEventListener("DOMContentLoaded", async () => {
+            const params = new URLSearchParams(window.location.search);
+            const sessionId = params.get("session_id") || "mock_session_default";
+            const bookingId = params.get("booking_id");
+
+            try {
+                const res = await fetch(`/api/payments/session/${sessionId}/verify?booking_id=${bookingId || ''}`);
+                if (res.ok) {
+                    const data = await res.json();
+                    document.getElementById("receipt-details").innerHTML = `
+                        <div class="receipt-row">
+                            <span>Booking Reference:</span>
+                            <strong>${data.reference_code}</strong>
+                        </div>
+                        <div class="receipt-row">
+                            <span>Service:</span>
+                            <span>${data.service_name}</span>
+                        </div>
+                        <div class="receipt-row">
+                            <span>Location:</span>
+                            <span>London ${data.postcode}</span>
+                        </div>
+                        <div class="receipt-row">
+                            <span>Scheduled Slot:</span>
+                            <span>${data.scheduled_date} (${data.scheduled_time_slot})</span>
+                        </div>
+                        <div class="receipt-row">
+                            <span>Payment Status:</span>
+                            <span class="badge-paid"><i class="fa-solid fa-shield-check"></i> PAID (${data.payment_intent_id ? data.payment_intent_id.substring(0, 15) : 'Stripe'})</span>
+                        </div>
+                        <div class="receipt-row">
+                            <span>Total Charged:</span>
+                            <span class="text-emerald">£${data.total_price_gbp.toFixed(2)}</span>
+                        </div>
+                    `;
+                } else {
+                    document.getElementById("receipt-details").innerHTML = `
+                        <div class="receipt-row">
+                            <span>Status:</span>
+                            <span class="badge-paid"><i class="fa-solid fa-check"></i> Payment Processed</span>
+                        </div>
+                        <p style="margin-top: 10px; color: var(--text-muted); font-size: 0.85rem;">
+                            Your booking has been registered. You can review full details in your customer dashboard.
+                        </p>
+                    `;
+                }
+            } catch (err) {
+                console.error("Receipt load err:", err);
+            }
+        });
+    </script>
+</body>
+</html>

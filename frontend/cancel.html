@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Payment Cancelled | CleanLondon</title>
+    <link rel="icon" type="image/jpeg" href="/static/logo.jpg">
+    <link rel="stylesheet" href="/static/style.css">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        .payment-container {
+            max-width: 550px;
+            margin: 60px auto;
+            padding: 0 20px;
+        }
+        .payment-card {
+            background: #ffffff;
+            border-radius: var(--radius-lg);
+            padding: 36px;
+            border: 1px solid var(--border-color);
+            box-shadow: var(--shadow-lg);
+            text-align: center;
+        }
+        .cancel-icon-bubble {
+            width: 72px;
+            height: 72px;
+            border-radius: 50%;
+            background: #fee2e2;
+            color: #e11d48;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2rem;
+            margin-bottom: 20px;
+        }
+    </style>
+</head>
+<body>
+    <header class="navbar" style="top: 0;">
+        <div class="nav-container">
+            <a href="/" class="brand-logo">
+                <img src="/static/logo.jpg" alt="CleanLondon Logo" class="brand-logo-img">
+                <span>Clean<strong>London</strong></span>
+            </a>
+        </div>
+    </header>
+
+    <main class="payment-container">
+        <div class="payment-card">
+            <div class="cancel-icon-bubble">
+                <i class="fa-solid fa-xmark"></i>
+            </div>
+            <h2>Checkout Incomplete</h2>
+            <p style="color: var(--text-muted); margin: 12px 0 24px;">
+                You exited Stripe Checkout. No charges were made to your card, and your booking slot is currently held in <strong>Pending</strong> status.
+            </p>
+
+            <div style="display: flex; gap: 12px; justify-content: center; flex-wrap: wrap;">
+                <a href="/" class="btn btn-outline">
+                    <i class="fa-solid fa-arrow-left"></i> Return to Dashboard
+                </a>
+                <button class="btn btn-primary" onclick="retryPayment()">
+                    <i class="fa-solid fa-credit-card"></i> Complete Payment Now
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        function retryPayment() {
+            const params = new URLSearchParams(window.location.search);
+            const bookingId = params.get("booking_id");
+            if (bookingId) {
+                window.location.href = `/?retry_booking=${bookingId}`;
+            } else {
+                window.location.href = "/";
+            }
+        }
+    </script>
+</body>
+</html>
