@@ -978,3 +978,110 @@ body {
         display: none;
     }
 }
+
+/* ==========================================================
+   AUTHENTICATION & ROUTING REFACTOR STYLES
+   ========================================================== */
+.hidden {
+    display: none !important;
+}
+
+.auth-buttons-group {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-secondary {
+    background: #e2e8f0;
+    color: var(--navy);
+    border: 1px solid #cbd5e1;
+}
+
+.btn-secondary:hover {
+    background: #cbd5e1;
+    color: #0f172a;
+}
+
+.user-greeting-pill {
+    background: var(--primary-light);
+    color: var(--primary-dark);
+    font-size: 0.85rem;
+    font-weight: 700;
+    padding: 6px 12px;
+    border-radius: 20px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid #bbf7d0;
+}
+
+.btn-signout:hover {
+    background: #fee2e2;
+    border-color: #fca5a5;
+    color: #b91c1c;
+}
+
+.hero-cta-banner {
+    margin-top: 24px;
+    background: rgba(255, 255, 255, 0.9);
+    border: 1px solid var(--border-color);
+    border-left: 4px solid var(--primary);
+    padding: 12px 16px;
+    border-radius: var(--radius-sm);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    box-shadow: var(--shadow-sm);
+}
+
+.hero-cta-banner p {
+    font-size: 0.85rem;
+    color: var(--navy);
+    margin: 0;
+}
+
+.auth-dialog {
+    max-width: 440px;
+}
+
+.auth-modal-footer {
+    margin-top: 18px;
+    padding-top: 14px;
+    border-top: 1px solid var(--border-color);
+    text-align: center;
+    font-size: 0.85rem;
+    color: var(--text-muted);
+}
+
+.auth-modal-footer a {
+    color: var(--primary);
+    text-decoration: none;
+    font-weight: 700;
+    margin-left: 4px;
+}
+
+.auth-modal-footer a:hover {
+    text-decoration: underline;
+}
+
+.auth-alert {
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 0.85rem;
+    margin-bottom: 14px;
+}
+
+.auth-alert.error {
+    background: #fef2f2;
+    border: 1px solid #fecaca;
+    color: #b91c1c;
+}
+
+.terms-notice {
+    font-size: 0.75rem;
+    color: var(--text-muted);
+    margin-bottom: 14px;
+    line-height: 1.4;
+}

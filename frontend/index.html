@@ -19,23 +19,23 @@
     <div class="demo-bar">
         <div class="demo-bar-inner">
             <span class="demo-tag"><i class="fa-solid fa-wand-magic-sparkles"></i> Role Preview:</span>
-            <button class="role-btn active" data-role="customer" onclick="switchRole('customer')">
+            <button class="role-btn" id="demo-btn-customer" data-role="customer" onclick="handleDemoRoleSwitch('customer')">
                 <i class="fa-solid fa-user"></i> Customer (Oliver)
             </button>
-            <button class="role-btn" data-role="staff" onclick="switchRole('staff')">
+            <button class="role-btn" id="demo-btn-staff" data-role="staff" onclick="handleDemoRoleSwitch('staff')">
                 <i class="fa-solid fa-spray-can-sparkles"></i> Staff (Elena)
             </button>
-            <button class="role-btn" data-role="manager" onclick="switchRole('manager')">
+            <button class="role-btn" id="demo-btn-manager" data-role="manager" onclick="handleDemoRoleSwitch('manager')">
                 <i class="fa-solid fa-chart-line"></i> Manager (Admin)
             </button>
-            <span class="active-user-badge" id="current-user-display">Logged in as: Oliver Smith (Customer)</span>
+            <span class="active-user-badge" id="current-user-display">Status: Guest (Unauthenticated)</span>
         </div>
     </div>
 
     <!-- Navigation Header -->
     <header class="navbar">
         <div class="nav-container">
-            <a href="#" class="brand-logo" onclick="switchView('landing')">
+            <a href="#" class="brand-logo" onclick="navigateToHome(event)">
                 <img src="/static/logo.jpg" alt="CleanLondon Logo" class="brand-logo-img">
                 <span>Clean<strong>London</strong></span>
             </a>
@@ -44,13 +44,35 @@
                 <a href="#services-section" class="nav-item">Services</a>
                 <a href="#quote-section" class="nav-item">Instant Quote</a>
                 <a href="#reviews-section" class="nav-item">Reviews</a>
-                <a href="#" class="nav-item" id="nav-dashboard-link" onclick="handleDashboardClick()">My Dashboard</a>
+                <a href="#" class="nav-item hidden" id="nav-dashboard-link" onclick="navigateToDashboard(event)">Dashboard</a>
             </nav>
 
             <div class="nav-actions">
                 <div class="trust-pill"><i class="fa-solid fa-shield-check"></i> £2M Insured</div>
-                <button class="btn btn-outline" id="auth-btn" onclick="toggleAuthModal()">Sign In</button>
-                <button class="btn btn-primary" onclick="scrollToQuote()">Book a Clean</button>
+
+                <!-- Unauthenticated Nav Actions -->
+                <div id="nav-unauth-actions" class="auth-buttons-group">
+                    <button class="btn btn-outline" id="nav-login-btn" onclick="openLoginModal()">
+                        <i class="fa-solid fa-arrow-right-to-bracket"></i> Log In
+                    </button>
+                    <button class="btn btn-secondary" id="nav-register-btn" onclick="openRegisterModal()">
+                        <i class="fa-solid fa-user-plus"></i> Create Account
+                    </button>
+                </div>
+
+                <!-- Authenticated Nav Actions -->
+                <div id="nav-auth-actions" class="auth-buttons-group hidden">
+                    <span class="user-greeting-pill" id="navbar-user-greeting">
+                        <i class="fa-solid fa-circle-user"></i> Hi, Oliver!
+                    </span>
+                    <button class="btn btn-outline btn-signout" id="nav-logout-btn" onclick="handleSignOut()">
+                        <i class="fa-solid fa-arrow-right-from-bracket"></i> Sign Out
+                    </button>
+                </div>
+
+                <button class="btn btn-primary" onclick="scrollToQuote()">
+                    <i class="fa-solid fa-calendar-check"></i> Book a Clean
+                </button>
             </div>
         </div>
     </header>
@@ -58,13 +80,16 @@
     <!-- Main Content Containers -->
     <main id="app-root">
 
-        <!-- 1. PUBLIC / CUSTOMER LANDING VIEW -->
+        <!-- ========================================================== -->
+        <!-- 1. PUBLIC LANDING PAGE (UNAUTHENTICATED VIEW)               -->
+        <!-- Shown by default when cleanlondon_token is null            -->
+        <!-- ========================================================== -->
         <section id="landing-view" class="view-panel active">
             <!-- Hero Banner -->
             <div class="hero">
                 <div class="hero-content">
                     <div class="badge-trust"><i class="fa-solid fa-award"></i> Voted London's #1 Most Reliable Cleaning Service</div>
-                    <h1>Brilliantly clean homes across London, <span class="text-emerald">effortlessly booked</span></h1>
+                    <h1>London's Most Trusted Cleaners, <span class="text-emerald">effortlessly booked</span></h1>
                     <p class="hero-subtext">Vetted, DBS-checked local cleaners. Dynamic upfront GBP (£) pricing. No hidden agency contracts.</p>
 
                     <div class="trust-metric-row">
@@ -72,13 +97,19 @@
                         <div class="metric"><i class="fa-solid fa-user-shield text-emerald"></i> 100% DBS-Checked</div>
                         <div class="metric"><i class="fa-solid fa-repeat text-indigo"></i> Rebook the same cleaner</div>
                     </div>
+
+                    <!-- Call To Action for Unregistered Guests -->
+                    <div class="hero-cta-banner">
+                        <p><i class="fa-solid fa-circle-info text-emerald"></i> New to CleanLondon? Create an account to track cleaner transit in real-time.</p>
+                        <button class="btn btn-outline btn-sm" onclick="openRegisterModal()"><i class="fa-solid fa-user-plus"></i> Sign Up in 30 Seconds</button>
+                    </div>
                 </div>
 
                 <!-- Instant Dynamic Quote Card -->
                 <div class="hero-card" id="quote-section">
                     <div class="card-header">
-                        <h3><i class="fa-solid fa-calculator text-emerald"></i> Calculate Your London Clean</h3>
-                        <p>Real-time dynamic estimate based on your home</p>
+                        <h3><i class="fa-solid fa-calculator text-emerald"></i> Get an Instant Quote</h3>
+                        <p>Real-time dynamic estimate based on your home size & postcode</p>
                     </div>
 
                     <form id="quote-form" onsubmit="handleQuoteSubmit(event)">
@@ -137,7 +168,7 @@
                             <div class="quote-meta" id="quote-meta-display">Estimated ~3.0 hrs • £19.50/hr</div>
                         </div>
 
-                        <button type="button" class="btn btn-primary btn-block" onclick="openBookingModal()">
+                        <button type="button" class="btn btn-primary btn-block" onclick="handleBookCleanClick()">
                             Proceed to Slot & Booking <i class="fa-solid fa-arrow-right"></i>
                         </button>
                     </form>
@@ -203,192 +234,295 @@
             </section>
         </section>
 
-        <!-- 2. CUSTOMER DASHBOARD VIEW -->
-        <section id="customer-dashboard-view" class="view-panel">
-            <div class="dashboard-header">
-                <div>
-                    <h2>Welcome back, <span id="customer-greeting-name">Oliver</span>!</h2>
-                    <p>Manage your upcoming appointments and leave reviews</p>
-                </div>
-                <button class="btn btn-primary" onclick="scrollToQuote()"><i class="fa-solid fa-plus"></i> Book Another Clean</button>
-            </div>
+        <!-- ========================================================== -->
+        <!-- 2. PRIVATE DASHBOARD (AUTHENTICATED WRAPPER)                -->
+        <!-- Controlled by JavaScript state: hidden when unauthenticated -->
+        <!-- ========================================================== -->
+        <div id="dashboard-view" class="hidden">
 
-            <div class="dashboard-content">
-                <div class="bookings-table-card">
-                    <div class="card-header">
-                        <h3><i class="fa-solid fa-calendar-check"></i> My Cleaning Bookings</h3>
+            <!-- Subview 2A: Customer Dashboard -->
+            <section id="customer-dashboard-view" class="view-panel">
+                <div class="dashboard-header">
+                    <div>
+                        <h2>Welcome back, <span id="customer-greeting-name">Oliver</span>!</h2>
+                        <p>Manage your upcoming appointments and leave reviews</p>
                     </div>
+                    <button class="btn btn-primary" onclick="scrollToQuote()"><i class="fa-solid fa-plus"></i> Book Another Clean</button>
+                </div>
+
+                <div class="dashboard-content">
+                    <div class="bookings-table-card">
+                        <div class="card-header">
+                            <h3><i class="fa-solid fa-calendar-check"></i> My Cleaning Bookings</h3>
+                        </div>
+                        <div class="table-responsive">
+                            <table class="data-table">
+                                <thead>
+                                    <tr>
+                                        <th>Ref #</th>
+                                        <th>Service</th>
+                                        <th>Date & Time</th>
+                                        <th>Address</th>
+                                        <th>Cleaner</th>
+                                        <th>Price</th>
+                                        <th>Status</th>
+                                        <th>Action</th>
+                                    </tr>
+                                </thead>
+                                <tbody id="customer-bookings-list">
+                                    <!-- Populated dynamically by app.js -->
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Subview 2B: Staff / Cleaner Dashboard -->
+            <section id="staff-dashboard-view" class="view-panel">
+                <div class="dashboard-header">
+                    <div>
+                        <h2>Cleaner Operations Dashboard</h2>
+                        <p>Logged in as: <strong id="staff-profile-name">Elena Petrova</strong> (Base: SE1 7PB Southwark)</p>
+                    </div>
+                    <div class="staff-badge-status">
+                        <span class="status-indicator online"></span> Available for Dispatch
+                    </div>
+                </div>
+
+                <div class="staff-grid">
+                    <!-- Assigned Jobs Column -->
+                    <div class="staff-jobs-column">
+                        <div class="bookings-table-card">
+                            <div class="card-header">
+                                <h3><i class="fa-solid fa-list-check"></i> My Assigned London Jobs</h3>
+                            </div>
+                            <div id="staff-jobs-container" class="job-card-list">
+                                <!-- Populated dynamically by app.js -->
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Live Map & Transit Route Simulation Column -->
+                    <div class="staff-map-column">
+                        <div class="map-card">
+                            <div class="card-header">
+                                <h3><i class="fa-solid fa-map-location-dot"></i> Job Location & Route Map</h3>
+                                <span class="badge-mock" id="map-mode-badge"><i class="fa-solid fa-satellite"></i> Mock GPS Mode</span>
+                            </div>
+                            <div class="interactive-map-mock" id="map-canvas">
+                                <div class="map-overlay-info" id="map-active-job-info">
+                                    <h4>Select a job to view location</h4>
+                                    <p>Shows route, key access instructions, and customer contact</p>
+                                </div>
+                                <div class="london-schematic-bg">
+                                    <div class="map-marker cleaner-marker" title="Your Location">
+                                        <i class="fa-solid fa-person-walking"></i>
+                                        <span>You (SE1)</span>
+                                    </div>
+                                    <div class="map-marker job-marker" id="job-pin" title="Active Booking Pin">
+                                        <i class="fa-solid fa-house-chimney"></i>
+                                        <span id="pin-postcode-text">SW1H 0EU</span>
+                                    </div>
+                                </div>
+                            </div>
+                            <div class="map-transit-details" id="transit-summary">
+                                <i class="fa-solid fa-train-subway"></i> <strong>TfL Transit:</strong> ~18 mins via Jubilee & Northern Lines to job location.
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </section>
+
+            <!-- Subview 2C: Manager (Admin) Dashboard -->
+            <section id="manager-dashboard-view" class="view-panel">
+                <div class="dashboard-header">
+                    <div>
+                        <h2>CleanLondon Executive Operations</h2>
+                        <p>Real-time London dispatch, cleaner utilization, and revenue performance</p>
+                    </div>
+                    <div class="header-actions">
+                        <button class="btn btn-outline" onclick="loadManagerData()"><i class="fa-solid fa-rotate"></i> Refresh</button>
+                    </div>
+                </div>
+
+                <!-- KPI Summary Cards -->
+                <div class="kpi-grid">
+                    <div class="kpi-card">
+                        <div class="kpi-icon emerald"><i class="fa-solid fa-sterling-sign"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-title">Daily Revenue (Today)</span>
+                            <h3 class="kpi-value" id="kpi-daily-rev">£88.00</h3>
+                            <span class="kpi-trend positive"><i class="fa-solid fa-arrow-up"></i> Live tracking</span>
+                        </div>
+                    </div>
+
+                    <div class="kpi-card">
+                        <div class="kpi-icon indigo"><i class="fa-solid fa-calendar-days"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-title">Gross Platform Revenue</span>
+                            <h3 class="kpi-value" id="kpi-monthly-rev">£336.50</h3>
+                            <span class="kpi-trend">All active bookings</span>
+                        </div>
+                    </div>
+
+                    <div class="kpi-card">
+                        <div class="kpi-icon amber"><i class="fa-solid fa-users-gear"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-title">Staff Utilization</span>
+                            <h3 class="kpi-value" id="kpi-utilization">50.0%</h3>
+                            <span class="kpi-trend"><span id="kpi-active-cleaners">1</span> of 2 Cleaners Active</span>
+                        </div>
+                    </div>
+
+                    <div class="kpi-card">
+                        <div class="kpi-icon rose"><i class="fa-solid fa-triangle-exclamation"></i></div>
+                        <div class="kpi-details">
+                            <span class="kpi-title">Unassigned Bookings</span>
+                            <h3 class="kpi-value" id="kpi-unassigned-count">0</h3>
+                            <span class="kpi-trend">Requires Dispatch</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dispatch Operations Table -->
+                <div class="bookings-table-card">
+                    <div class="card-header space-between">
+                        <h3><i class="fa-solid fa-truck-fast"></i> Dispatch Console & Job Allocation</h3>
+                        <div class="filter-group">
+                            <label>Filter Status:</label>
+                            <select id="manager-status-filter" onchange="loadManagerData()">
+                                <option value="ALL">All Statuses</option>
+                                <option value="SCHEDULED">Scheduled</option>
+                                <option value="EN_ROUTE">En Route</option>
+                                <option value="IN_PROGRESS">In Progress</option>
+                                <option value="COMPLETED">Completed</option>
+                            </select>
+                        </div>
+                    </div>
+
                     <div class="table-responsive">
                         <table class="data-table">
                             <thead>
                                 <tr>
                                     <th>Ref #</th>
+                                    <th>Customer</th>
+                                    <th>Postcode</th>
                                     <th>Service</th>
-                                    <th>Date & Time</th>
-                                    <th>Address</th>
-                                    <th>Cleaner</th>
-                                    <th>Price</th>
+                                    <th>Date & Slot</th>
+                                    <th>Value</th>
                                     <th>Status</th>
+                                    <th>Assigned Cleaner</th>
                                     <th>Action</th>
                                 </tr>
                             </thead>
-                            <tbody id="customer-bookings-list">
+                            <tbody id="manager-bookings-list">
                                 <!-- Populated dynamically by app.js -->
                             </tbody>
                         </table>
                     </div>
                 </div>
-            </div>
-        </section>
-
-        <!-- 3. STAFF / CLEANER DASHBOARD VIEW -->
-        <section id="staff-dashboard-view" class="view-panel">
-            <div class="dashboard-header">
-                <div>
-                    <h2>Cleaner Operations Dashboard</h2>
-                    <p>Logged in as: <strong id="staff-profile-name">Elena Petrova</strong> (Base: SE1 7PB Southwark)</p>
-                </div>
-                <div class="staff-badge-status">
-                    <span class="status-indicator online"></span> Available for Dispatch
-                </div>
-            </div>
-
-            <div class="staff-grid">
-                <!-- Assigned Jobs Column -->
-                <div class="staff-jobs-column">
-                    <div class="bookings-table-card">
-                        <div class="card-header">
-                            <h3><i class="fa-solid fa-list-check"></i> My Assigned London Jobs</h3>
-                        </div>
-                        <div id="staff-jobs-container" class="job-card-list">
-                            <!-- Populated dynamically by app.js -->
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Live Map & Transit Route Simulation Column -->
-                <div class="staff-map-column">
-                    <div class="map-card">
-                        <div class="card-header">
-                            <h3><i class="fa-solid fa-map-location-dot"></i> Job Location & Route Map</h3>
-                            <span class="badge-mock" id="map-mode-badge"><i class="fa-solid fa-satellite"></i> Mock GPS Mode</span>
-                        </div>
-                        <div class="interactive-map-mock" id="map-canvas">
-                            <div class="map-overlay-info" id="map-active-job-info">
-                                <h4>Select a job to view location</h4>
-                                <p>Shows route, key access instructions, and customer contact</p>
-                            </div>
-                            <div class="london-schematic-bg">
-                                <div class="map-marker cleaner-marker" title="Your Location">
-                                    <i class="fa-solid fa-person-walking"></i>
-                                    <span>You (SE1)</span>
-                                </div>
-                                <div class="map-marker job-marker" id="job-pin" title="Active Booking Pin">
-                                    <i class="fa-solid fa-house-chimney"></i>
-                                    <span id="pin-postcode-text">SW1H 0EU</span>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="map-transit-details" id="transit-summary">
-                            <i class="fa-solid fa-train-subway"></i> <strong>TfL Transit:</strong> ~18 mins via Jubilee & Northern Lines to job location.
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </section>
-
-        <!-- 4. MANAGER (ADMIN) DASHBOARD VIEW -->
-        <section id="manager-dashboard-view" class="view-panel">
-            <div class="dashboard-header">
-                <div>
-                    <h2>CleanLondon Executive Operations</h2>
-                    <p>Real-time London dispatch, cleaner utilization, and revenue performance</p>
-                </div>
-                <div class="header-actions">
-                    <button class="btn btn-outline" onclick="loadManagerData()"><i class="fa-solid fa-rotate"></i> Refresh</button>
-                </div>
-            </div>
-
-            <!-- KPI Summary Cards -->
-            <div class="kpi-grid">
-                <div class="kpi-card">
-                    <div class="kpi-icon emerald"><i class="fa-solid fa-sterling-sign"></i></div>
-                    <div class="kpi-details">
-                        <span class="kpi-title">Daily Revenue (Today)</span>
-                        <h3 class="kpi-value" id="kpi-daily-rev">£88.00</h3>
-                        <span class="kpi-trend positive"><i class="fa-solid fa-arrow-up"></i> +14% vs yesterday</span>
-                    </div>
-                </div>
-
-                <div class="kpi-card">
-                    <div class="kpi-icon indigo"><i class="fa-solid fa-calendar-days"></i></div>
-                    <div class="kpi-details">
-                        <span class="kpi-title">Gross Platform Revenue</span>
-                        <h3 class="kpi-value" id="kpi-monthly-rev">£336.50</h3>
-                        <span class="kpi-trend">All active bookings</span>
-                    </div>
-                </div>
-
-                <div class="kpi-card">
-                    <div class="kpi-icon amber"><i class="fa-solid fa-users-gear"></i></div>
-                    <div class="kpi-details">
-                        <span class="kpi-title">Staff Utilization</span>
-                        <h3 class="kpi-value" id="kpi-utilization">50.0%</h3>
-                        <span class="kpi-trend"><span id="kpi-active-cleaners">1</span> of 2 Cleaners Active</span>
-                    </div>
-                </div>
-
-                <div class="kpi-card">
-                    <div class="kpi-icon rose"><i class="fa-solid fa-triangle-exclamation"></i></div>
-                    <div class="kpi-details">
-                        <span class="kpi-title">Unassigned Bookings</span>
-                        <h3 class="kpi-value" id="kpi-unassigned-count">1</h3>
-                        <span class="kpi-trend">Requires Dispatch</span>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Dispatch Operations Table -->
-            <div class="bookings-table-card">
-                <div class="card-header space-between">
-                    <h3><i class="fa-solid fa-truck-fast"></i> Dispatch Console & Job Allocation</h3>
-                    <div class="filter-group">
-                        <label>Filter Status:</label>
-                        <select id="manager-status-filter" onchange="loadManagerData()">
-                            <option value="ALL">All Statuses</option>
-                            <option value="SCHEDULED">Scheduled</option>
-                            <option value="EN_ROUTE">En Route</option>
-                            <option value="IN_PROGRESS">In Progress</option>
-                            <option value="COMPLETED">Completed</option>
-                        </select>
-                    </div>
-                </div>
-
-                <div class="table-responsive">
-                    <table class="data-table">
-                        <thead>
-                            <tr>
-                                <th>Ref #</th>
-                                <th>Customer</th>
-                                <th>Postcode</th>
-                                <th>Service</th>
-                                <th>Date & Slot</th>
-                                <th>Value</th>
-                                <th>Status</th>
-                                <th>Assigned Cleaner</th>
-                                <th>Action</th>
-                            </tr>
-                        </thead>
-                        <tbody id="manager-bookings-list">
-                            <!-- Populated dynamically by app.js -->
-                        </tbody>
-                    </table>
-                </div>
-            </div>
-        </section>
+            </section>
+        </div>
     </main>
 
-    <!-- Modal: Customer Booking Form -->
+    <!-- ========================================================== -->
+    <!-- MODAL 1: LOG IN MODAL                                      -->
+    <!-- ========================================================== -->
+    <div class="modal-overlay" id="login-modal">
+        <div class="modal-dialog auth-dialog">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-arrow-right-to-bracket text-emerald"></i> Sign In to CleanLondon</h3>
+                <button class="modal-close" onclick="closeLoginModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Google 1-Click Prototype -->
+                <button type="button" class="btn-google-login" onclick="triggerGoogleSignIn()">
+                    <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google">
+                    Continue with Google
+                </button>
+
+                <div class="separator"><span>or sign in with email</span></div>
+
+                <form id="login-form" onsubmit="handleManualLogin(event)">
+                    <div id="login-error-alert" class="auth-alert error hidden"></div>
+
+                    <div class="form-group">
+                        <label for="login-email"><i class="fa-solid fa-envelope"></i> Email Address</label>
+                        <input type="email" id="login-email" placeholder="name@example.co.uk" value="oliver.smith@example.co.uk" required>
+                    </div>
+                    <div class="form-group">
+                        <label for="login-password"><i class="fa-solid fa-lock"></i> Password</label>
+                        <input type="password" id="login-password" placeholder="••••••••" value="Password123!" required>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary btn-block" id="login-submit-btn">
+                        Sign In <i class="fa-solid fa-arrow-right"></i>
+                    </button>
+                </form>
+
+                <div class="auth-modal-footer">
+                    <span>Don't have an account?</span>
+                    <a href="#" onclick="switchToRegister(event)">Create an account</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================================== -->
+    <!-- MODAL 2: CREATE ACCOUNT (SIGN UP) MODAL                    -->
+    <!-- ========================================================== -->
+    <div class="modal-overlay" id="register-modal">
+        <div class="modal-dialog auth-dialog">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-user-plus text-emerald"></i> Create CleanLondon Account</h3>
+                <button class="modal-close" onclick="closeRegisterModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="register-form" onsubmit="handleRegistration(event)">
+                    <div id="register-error-alert" class="auth-alert error hidden"></div>
+
+                    <!-- Hidden role field assigning customer role -->
+                    <input type="hidden" id="register-role" value="customer">
+
+                    <div class="form-group">
+                        <label for="register-name"><i class="fa-solid fa-user"></i> Full Name *</label>
+                        <input type="text" id="register-name" placeholder="e.g. Amelia Clark" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="register-email"><i class="fa-solid fa-envelope"></i> Email Address *</label>
+                        <input type="email" id="register-email" placeholder="amelia.clark@example.co.uk" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="register-phone"><i class="fa-solid fa-phone"></i> UK Mobile Phone *</label>
+                        <input type="tel" id="register-phone" placeholder="e.g. +44 7911 123456" value="+44 7911 987654" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="register-password"><i class="fa-solid fa-lock"></i> Password (min 8 chars) *</label>
+                        <input type="password" id="register-password" placeholder="Create a secure password" minlength="8" required>
+                    </div>
+
+                    <p class="terms-notice">
+                        By creating an account, you agree to CleanLondon's UK GDPR-compliant Key Handling & Domestic Cleaning Terms.
+                    </p>
+
+                    <button type="submit" class="btn btn-primary btn-block" id="register-submit-btn">
+                        Create Account & Log In <i class="fa-solid fa-check"></i>
+                    </button>
+                </form>
+
+                <div class="auth-modal-footer">
+                    <span>Already have an account?</span>
+                    <a href="#" onclick="switchToLogin(event)">Log In</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL 3: CUSTOMER BOOKING FORM -->
     <div class="modal-overlay" id="booking-modal">
         <div class="modal-dialog">
             <div class="modal-header">
@@ -452,7 +586,7 @@
         </div>
     </div>
 
-    <!-- Modal: Review Submission -->
+    <!-- MODAL 4: REVIEW SUBMISSION -->
     <div class="modal-overlay" id="review-modal">
         <div class="modal-dialog">
             <div class="modal-header">
@@ -480,37 +614,6 @@
                     </div>
 
                     <button type="submit" class="btn btn-primary btn-block">Submit Verified Review</button>
-                </form>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal: Auth / Sign In / Google OAuth -->
-    <div class="modal-overlay" id="auth-modal">
-        <div class="modal-dialog auth-dialog">
-            <div class="modal-header">
-                <h3>Sign in to CleanLondon</h3>
-                <button class="modal-close" onclick="toggleAuthModal()">&times;</button>
-            </div>
-            <div class="modal-body">
-                <!-- Google 1-Click Button Prototype -->
-                <button type="button" class="btn-google-login" onclick="triggerGoogleSignIn()">
-                    <img src="https://www.gstatic.com/images/branding/product/1x/gsa_512dp.png" alt="Google">
-                    Continue with Google
-                </button>
-
-                <div class="separator"><span>or sign in with email</span></div>
-
-                <form id="login-form" onsubmit="handleManualLogin(event)">
-                    <div class="form-group">
-                        <label>Email Address</label>
-                        <input type="email" id="login-email" value="oliver.smith@example.co.uk" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Password</label>
-                        <input type="password" id="login-password" value="Password123!" required>
-                    </div>
-                    <button type="submit" class="btn btn-primary btn-block">Sign In</button>
                 </form>
             </div>
         </div>

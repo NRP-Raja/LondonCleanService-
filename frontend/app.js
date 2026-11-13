@@ -1,18 +1,14 @@
 // ==========================================================
 // CleanLondon Vanilla JS Client
-// End-to-end dynamic frontend logic for 3 distinct user roles
+// Authentication, State Management & Role-Based SPA Routing
 // ==========================================================
 
 const API_BASE = ""; // Relative to FastAPI host
+const TOKEN_KEY = "cleanlondon_token";
 
 let state = {
     token: null,
-    user: {
-        id: 4,
-        email: "oliver.smith@example.co.uk",
-        full_name: "Oliver Smith",
-        role: "customer"
-    },
+    user: null, // Populated from /api/auth/me or login
     quote: {
         postcode: "SW1A 1AA",
         service_id: 1,
@@ -29,7 +25,7 @@ let state = {
 };
 
 // ==========================================================
-// INITIALIZATION
+// 1. INITIALIZATION & AUTH STATE ROUTER
 // ==========================================================
 document.addEventListener("DOMContentLoaded", async () => {
     // Set default booking date to tomorrow
@@ -40,20 +36,288 @@ document.addEventListener("DOMContentLoaded", async () => {
         dateInput.value = tomorrow.toISOString().split("T")[0];
     }
 
-    // Initialize with Customer role token
-    await switchRole("customer");
+    // Initialize instant quote calculations for public view
     recalculateQuote();
+
+    // Check authentication state on page load
+    await checkAuthState();
 });
 
-// ==========================================================
-// ROLE SWITCHING & AUTH
-// ==========================================================
-async function switchRole(roleName) {
-    // Update active button state
+/**
+ * Core Auth State Verifier:
+ * Inspects localStorage for JWT token. If present, validates against /api/auth/me.
+ * Controls whether the Public Landing Page or Private Dashboard is shown.
+ */
+async function checkAuthState() {
+    const storedToken = localStorage.getItem(TOKEN_KEY);
+
+    if (!storedToken) {
+        // --- UNAUTHENTICATED STATE ---
+        state.token = null;
+        state.user = null;
+        applyUnauthenticatedView();
+        return;
+    }
+
+    // Validate token with backend
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/me`, {
+            headers: { "Authorization": `Bearer ${storedToken}` }
+        });
+
+        if (response.ok) {
+            const data = await response.json();
+            state.token = storedToken;
+            state.user = data.user;
+            applyAuthenticatedView();
+        } else {
+            // Token expired or invalid
+            console.warn("Stored JWT is invalid or expired. Clearing session.");
+            localStorage.removeItem(TOKEN_KEY);
+            state.token = null;
+            state.user = null;
+            applyUnauthenticatedView();
+        }
+    } catch (err) {
+        console.error("Network or auth check error:", err);
+        // Fallback to unauthenticated on connection failure
+        applyUnauthenticatedView();
+    }
+}
+
+/**
+ * Configures DOM for Unauthenticated Guests
+ */
+function applyUnauthenticatedView() {
+    // 1. View Management: Show Landing Page, Hide Private Dashboard
+    document.getElementById("landing-view").classList.add("active");
+    document.getElementById("dashboard-view").classList.add("hidden");
+
+    // Hide any dashboard sub-views
+    document.getElementById("customer-dashboard-view").classList.remove("active");
+    document.getElementById("staff-dashboard-view").classList.remove("active");
+    document.getElementById("manager-dashboard-view").classList.remove("active");
+
+    // 2. Navigation Elements
+    document.getElementById("nav-unauth-actions").classList.remove("hidden");
+    document.getElementById("nav-auth-actions").classList.add("hidden");
+    document.getElementById("nav-dashboard-link").classList.add("hidden");
+
+    // 3. Top Demo Bar Display
+    const userDisplay = document.getElementById("current-user-display");
+    if (userDisplay) {
+        userDisplay.textContent = "Status: Guest (Unauthenticated)";
+        userDisplay.style.color = "#94a3b8";
+    }
+
+    // Clear active highlight on role switcher
+    document.querySelectorAll(".role-btn").forEach(btn => btn.classList.remove("active"));
+}
+
+/**
+ * Configures DOM for Authenticated Users (Customer, Staff, Manager)
+ */
+function applyAuthenticatedView() {
+    if (!state.user) return;
+
+    const user = state.user;
+    const role = user.role.toLowerCase();
+
+    // 1. View Management: Hide Public Landing Page, Reveal Private Dashboard Wrapper
+    document.getElementById("landing-view").classList.remove("active");
+    document.getElementById("dashboard-view").classList.remove("hidden");
+
+    // 2. Navigation Bar Updates
+    document.getElementById("nav-unauth-actions").classList.add("hidden");
+    document.getElementById("nav-auth-actions").classList.remove("hidden");
+    document.getElementById("nav-dashboard-link").classList.remove("hidden");
+
+    const firstName = user.full_name ? user.full_name.split(" ")[0] : "User";
+    document.getElementById("navbar-user-greeting").innerHTML = `<i class="fa-solid fa-circle-user"></i> Hi, ${firstName}!`;
+
+    // 3. Top Demo Bar Status Display
+    const userDisplay = document.getElementById("current-user-display");
+    if (userDisplay) {
+        const roleLabel = role.charAt(0).toUpperCase() + role.slice(1);
+        userDisplay.textContent = `Logged in: ${user.full_name} (${roleLabel})`;
+        userDisplay.style.color = "#38bdf8";
+    }
+
+    // Highlight active role preview button if matched
     document.querySelectorAll(".role-btn").forEach(btn => {
-        btn.classList.toggle("active", btn.dataset.role === roleName);
+        btn.classList.toggle("active", btn.dataset.role === role);
     });
 
+    // 4. Role-Specific Sub-Dashboard Routing
+    document.getElementById("customer-dashboard-view").classList.remove("active");
+    document.getElementById("staff-dashboard-view").classList.remove("active");
+    document.getElementById("manager-dashboard-view").classList.remove("active");
+
+    if (role === "customer") {
+        document.getElementById("customer-dashboard-view").classList.add("active");
+        const greetingEl = document.getElementById("customer-greeting-name");
+        if (greetingEl) greetingEl.textContent = firstName;
+        loadCustomerBookings();
+    } else if (role === "staff") {
+        document.getElementById("staff-dashboard-view").classList.add("active");
+        const staffNameEl = document.getElementById("staff-profile-name");
+        if (staffNameEl) staffNameEl.textContent = user.full_name;
+        loadStaffJobs();
+    } else if (role === "manager") {
+        document.getElementById("manager-dashboard-view").classList.add("active");
+        loadManagerData();
+    }
+
+    window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+// ==========================================================
+// 2. AUTHENTICATION FORMS & SIGN OUT
+// ==========================================================
+
+/**
+ * Handle Manual Email/Password Login
+ */
+async function handleManualLogin(e) {
+    e.preventDefault();
+    const email = document.getElementById("login-email").value.trim();
+    const password = document.getElementById("login-password").value;
+    const errorAlert = document.getElementById("login-error-alert");
+    const submitBtn = document.getElementById("login-submit-btn");
+
+    errorAlert.classList.add("hidden");
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Signing in...`;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, password })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            // Save JWT in localStorage
+            localStorage.setItem(TOKEN_KEY, data.access_token);
+            closeLoginModal();
+            await checkAuthState();
+        } else {
+            errorAlert.textContent = data.detail || "Invalid email or password.";
+            errorAlert.classList.remove("hidden");
+        }
+    } catch (err) {
+        errorAlert.textContent = "Unable to connect to server. Please verify your connection.";
+        errorAlert.classList.remove("hidden");
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `Sign In <i class="fa-solid fa-arrow-right"></i>`;
+    }
+}
+
+/**
+ * Handle Account Registration
+ */
+async function handleRegistration(e) {
+    e.preventDefault();
+    const fullName = document.getElementById("register-name").value.trim();
+    const email = document.getElementById("register-email").value.trim();
+    const phone = document.getElementById("register-phone").value.trim();
+    const password = document.getElementById("register-password").value;
+    const role = document.getElementById("register-role").value || "customer";
+    const errorAlert = document.getElementById("register-error-alert");
+    const submitBtn = document.getElementById("register-submit-btn");
+
+    errorAlert.classList.add("hidden");
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> Creating account...`;
+
+    try {
+        const response = await fetch(`${API_BASE}/api/auth/register`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                full_name: fullName,
+                email: email,
+                phone: phone,
+                password: password,
+                role: role
+            })
+        });
+
+        const data = await response.json();
+
+        if (response.ok) {
+            // Automatically log in by storing returned JWT
+            localStorage.setItem(TOKEN_KEY, data.access_token);
+            closeRegisterModal();
+            await checkAuthState();
+        } else {
+            errorAlert.textContent = data.detail || "Registration failed. Please check inputs.";
+            errorAlert.classList.remove("hidden");
+        }
+    } catch (err) {
+        errorAlert.textContent = "Server error during registration. Please try again.";
+        errorAlert.classList.remove("hidden");
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = `Create Account & Log In <i class="fa-solid fa-check"></i>`;
+    }
+}
+
+/**
+ * Sign Out: Clears session and redirects to public landing page
+ */
+function handleSignOut() {
+    localStorage.removeItem(TOKEN_KEY);
+    state.token = null;
+    state.user = null;
+
+    // Reset customer bookings list in DOM
+    const customerList = document.getElementById("customer-bookings-list");
+    if (customerList) customerList.innerHTML = "";
+
+    // Re-evaluate auth state to bring user to Public Landing Page
+    checkAuthState();
+}
+
+/**
+ * Google OAuth 2.0 Sign-In Prototype (Mock Fallback)
+ */
+async function triggerGoogleSignIn() {
+    try {
+        const res = await fetch(`${API_BASE}/api/auth/google/login`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                id_token: "google-oauth-token-" + Date.now(),
+                email: "london.client@gmail.com",
+                name: "London Google User"
+            })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            localStorage.setItem(TOKEN_KEY, data.access_token);
+            closeLoginModal();
+            closeRegisterModal();
+            await checkAuthState();
+        } else {
+            alert(`Google login error: ${data.detail}`);
+        }
+    } catch (err) {
+        alert("Google OAuth prototype could not connect.");
+    }
+}
+
+// ==========================================================
+// 3. STEP D: DEMO ROLE SWITCHER (ONE-CLICK PREVIEW)
+// ==========================================================
+/**
+ * Injects a valid JWT for the chosen demo account directly into localStorage
+ * and forcefully re-evaluates the authentication state.
+ */
+async function handleDemoRoleSwitch(roleName) {
     try {
         const response = await fetch(`${API_BASE}/api/auth/demo-switch`, {
             method: "POST",
@@ -62,74 +326,89 @@ async function switchRole(roleName) {
         });
         const data = await response.json();
         if (response.ok) {
-            state.token = data.access_token;
-            state.user = data.user;
-            localStorage.setItem("cleanlondon_token", data.access_token);
-            updateUserHeaderDisplay();
-
-            // Automatically navigate to relevant view
-            if (roleName === "customer") {
-                switchView("customer-dashboard");
-                loadCustomerBookings();
-            } else if (roleName === "staff") {
-                switchView("staff-dashboard");
-                loadStaffJobs();
-            } else if (roleName === "manager") {
-                switchView("manager-dashboard");
-                loadManagerData();
-            }
+            // Save mock token to localStorage
+            localStorage.setItem(TOKEN_KEY, data.access_token);
+            // Re-evaluate state
+            await checkAuthState();
+        } else {
+            alert(`Could not switch role to ${roleName}: ${data.detail}`);
         }
     } catch (err) {
-        console.error("Role switch error:", err);
+        console.error("Demo role switch error:", err);
     }
 }
 
-function updateUserHeaderDisplay() {
-    const displayEl = document.getElementById("current-user-display");
-    const authBtn = document.getElementById("auth-btn");
-    const greetingEl = document.getElementById("customer-greeting-name");
-    const staffProfileEl = document.getElementById("staff-profile-name");
-
-    if (state.user) {
-        const roleLabel = state.user.role.charAt(0).toUpperCase() + state.user.role.slice(1);
-        displayEl.textContent = `Logged in as: ${state.user.full_name} (${roleLabel})`;
-        if (authBtn) authBtn.textContent = `Sign Out (${state.user.full_name.split(' ')[0]})`;
-        if (greetingEl) greetingEl.textContent = state.user.full_name.split(' ')[0];
-        if (staffProfileEl) staffProfileEl.textContent = state.user.full_name;
-    }
+// ==========================================================
+// 4. NAVIGATION & MODAL CONTROLLERS
+// ==========================================================
+function openLoginModal() {
+    document.getElementById("login-error-alert").classList.add("hidden");
+    document.getElementById("login-modal").classList.add("active");
 }
 
-function switchView(viewName) {
-    document.querySelectorAll(".view-panel").forEach(panel => panel.classList.remove("active"));
-    const target = document.getElementById(`${viewName}-view`);
-    if (target) {
-        target.classList.add("active");
-        window.scrollTo({ top: 0, behavior: "smooth" });
-    }
+function closeLoginModal() {
+    document.getElementById("login-modal").classList.remove("active");
 }
 
-function handleDashboardClick() {
-    if (state.user.role === "customer") {
-        switchView("customer-dashboard");
-        loadCustomerBookings();
-    } else if (state.user.role === "staff") {
-        switchView("staff-dashboard");
-        loadStaffJobs();
-    } else if (state.user.role === "manager") {
-        switchView("manager-dashboard");
-        loadManagerData();
+function openRegisterModal() {
+    document.getElementById("register-error-alert").classList.add("hidden");
+    document.getElementById("register-modal").classList.add("active");
+}
+
+function closeRegisterModal() {
+    document.getElementById("register-modal").classList.remove("active");
+}
+
+function switchToRegister(e) {
+    if (e) e.preventDefault();
+    closeLoginModal();
+    openRegisterModal();
+}
+
+function switchToLogin(e) {
+    if (e) e.preventDefault();
+    closeRegisterModal();
+    openLoginModal();
+}
+
+function navigateToHome(e) {
+    if (e) e.preventDefault();
+    document.getElementById("landing-view").classList.add("active");
+    document.getElementById("dashboard-view").classList.add("hidden");
+    window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function navigateToDashboard(e) {
+    if (e) e.preventDefault();
+    if (state.token && state.user) {
+        applyAuthenticatedView();
+    } else {
+        openLoginModal();
     }
 }
 
 function scrollToQuote() {
-    switchView("landing");
+    // If on dashboard, switch to landing view first
+    document.getElementById("landing-view").classList.add("active");
+    document.getElementById("dashboard-view").classList.add("hidden");
+
     setTimeout(() => {
-        document.getElementById("quote-section").scrollIntoView({ behavior: "smooth" });
-    }, 100);
+        const quoteEl = document.getElementById("quote-section");
+        if (quoteEl) quoteEl.scrollIntoView({ behavior: "smooth" });
+    }, 50);
+}
+
+function handleBookCleanClick() {
+    if (!state.token || !state.user) {
+        // Prompt guest to log in or create an account before reserving
+        openLoginModal();
+    } else {
+        openBookingModal();
+    }
 }
 
 // ==========================================================
-// DYNAMIC PRICING ENGINE
+// 5. DYNAMIC PRICING ENGINE
 // ==========================================================
 function adjustCount(type, delta) {
     if (type === "bedrooms") {
@@ -176,7 +455,7 @@ async function recalculateQuote() {
             document.getElementById("quote-price-display").textContent = `£${data.total_price_gbp.toFixed(2)}`;
             document.getElementById("quote-meta-display").textContent =
                 `Estimated ~${data.estimated_duration_hours} hrs • £${data.hourly_equivalent_gbp.toFixed(2)}/hr`;
-            
+
             const modalTotal = document.getElementById("modal-total-display");
             if (modalTotal) modalTotal.textContent = `£${data.total_price_gbp.toFixed(2)}`;
         }
@@ -207,7 +486,7 @@ async function lookupPostcodeArea() {
 }
 
 // ==========================================================
-// CUSTOMER BOOKING FLOW & MODALS
+// 6. CUSTOMER BOOKING FLOW
 // ==========================================================
 function openBookingModal() {
     const bookPostcode = document.getElementById("book-postcode");
@@ -223,6 +502,11 @@ function closeBookingModal() {
 
 async function submitNewBooking(e) {
     e.preventDefault();
+    if (!state.token) {
+        openLoginModal();
+        return;
+    }
+
     const addressLine1 = document.getElementById("book-address1").value;
     const addressLine2 = document.getElementById("book-address2").value;
     const postcode = document.getElementById("book-postcode").value;
@@ -263,10 +547,9 @@ async function submitNewBooking(e) {
         if (res.ok) {
             closeBookingModal();
             alert(`🎉 Booking Confirmed! Ref: ${data.reference_code}. Total: £${data.total_price_gbp.toFixed(2)}`);
-            switchView("customer-dashboard");
-            loadCustomerBookings();
+            applyAuthenticatedView();
         } else {
-            alert(`Error: ${data.detail || "Could not complete booking"}`);
+            alert(`Booking Error: ${data.detail || "Could not complete booking"}`);
         }
     } catch (err) {
         alert("Booking submission failed. Please try again.");
@@ -274,6 +557,7 @@ async function submitNewBooking(e) {
 }
 
 async function loadCustomerBookings() {
+    if (!state.token) return;
     const listBody = document.getElementById("customer-bookings-list");
     listBody.innerHTML = `<tr><td colspan="8" class="text-center">Loading your London bookings...</td></tr>`;
 
@@ -318,7 +602,7 @@ async function loadCustomerBookings() {
 }
 
 // ==========================================================
-// REVIEWS
+// 7. REVIEWS
 // ==========================================================
 function openReviewModal(bookingId) {
     document.getElementById("review-booking-id").value = bookingId;
@@ -371,9 +655,10 @@ async function submitReview(e) {
 }
 
 // ==========================================================
-// STAFF / CLEANER WORKFLOW & MAP
+// 8. STAFF / CLEANER WORKFLOW & MAP
 // ==========================================================
 async function loadStaffJobs() {
+    if (!state.token) return;
     const container = document.getElementById("staff-jobs-container");
     container.innerHTML = `<div class="p-4 text-center">Loading assigned tasks...</div>`;
 
@@ -389,7 +674,6 @@ async function loadStaffJobs() {
             }
 
             container.innerHTML = data.jobs.map(j => {
-                // Next valid status
                 let nextActionBtn = "";
                 if (j.status === "SCHEDULED") {
                     nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="advanceJobStatus(${j.id}, 'EN_ROUTE')"><i class="fa-solid fa-person-walking"></i> Start: En Route</button>`;
@@ -422,7 +706,6 @@ async function loadStaffJobs() {
                 `;
             }).join("");
 
-            // Select first job for map
             if (data.jobs.length > 0 && !state.activeJobForMap) {
                 selectJobForMap(data.jobs[0]);
             }
@@ -469,9 +752,10 @@ function selectJobForMap(job) {
 }
 
 // ==========================================================
-// MANAGER DASHBOARD & DISPATCH OPERATIONS
+// 9. MANAGER DASHBOARD & DISPATCH
 // ==========================================================
 async function loadManagerData() {
+    if (!state.token) return;
     loadManagerKPIs();
     loadManagerBookings();
 }
@@ -586,66 +870,5 @@ async function manuallyReassign(bookingId, staffId) {
         }
     } catch (err) {
         alert("Manual assignment failed.");
-    }
-}
-
-// ==========================================================
-// GOOGLE OAUTH 2.0 PROTOCOL & MOCK SIGN-IN
-// ==========================================================
-function toggleAuthModal() {
-    const modal = document.getElementById("auth-modal");
-    modal.classList.toggle("active");
-}
-
-async function triggerGoogleSignIn() {
-    try {
-        const res = await fetch(`${API_BASE}/api/auth/google/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-                id_token: "mock-google-id-token-" + Date.now(),
-                email: "london.resident@googlemail.com",
-                name: "London Resident"
-            })
-        });
-        const data = await res.json();
-        if (res.ok) {
-            state.token = data.access_token;
-            state.user = data.user;
-            toggleAuthModal();
-            updateUserHeaderDisplay();
-            alert(`👋 Signed in via Google OAuth 2.0 as ${data.user.full_name} (${data.is_mock ? 'Mock Mode' : 'Live'})`);
-            switchView("customer-dashboard");
-            loadCustomerBookings();
-        }
-    } catch (err) {
-        alert("Google Sign-In failed.");
-    }
-}
-
-async function handleManualLogin(e) {
-    e.preventDefault();
-    const email = document.getElementById("login-email").value;
-    const password = document.getElementById("login-password").value;
-
-    try {
-        const res = await fetch(`${API_BASE}/api/auth/login`, {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, password })
-        });
-        const data = await res.json();
-        if (res.ok) {
-            state.token = data.access_token;
-            state.user = data.user;
-            toggleAuthModal();
-            updateUserHeaderDisplay();
-            alert(`Welcome back, ${data.user.full_name}!`);
-            handleDashboardClick();
-        } else {
-            alert(`Login failed: ${data.detail || "Invalid credentials"}`);
-        }
-    } catch (err) {
-        alert("Authentication error.");
     }
 }
