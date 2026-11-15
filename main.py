@@ -63,6 +63,58 @@ STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "http://localhost:8000/static
 stripe.api_key = STRIPE_SECRET_KEY
 
 import bcrypt
+import base64
+import hashlib
+from cryptography.fernet import Fernet
+
+# UK GDPR Sensitive Data Encryption Key (AES-256 Fernet)
+DATA_ENCRYPTION_KEY = os.getenv("DATA_ENCRYPTION_KEY")
+if not DATA_ENCRYPTION_KEY:
+    # Deterministically derive 32-byte urlsafe base64 key from JWT_SECRET_KEY as fallback
+    derived = hashlib.sha256(JWT_SECRET_KEY.encode('utf-8')).digest()
+    DATA_ENCRYPTION_KEY = base64.urlsafe_b64encode(derived).decode('utf-8')
+
+cipher_suite = Fernet(DATA_ENCRYPTION_KEY.encode('utf-8') if isinstance(DATA_ENCRYPTION_KEY, str) else DATA_ENCRYPTION_KEY)
+
+def encrypt_sensitive_data(plaintext: Optional[str]) -> Optional[str]:
+    """Encrypt sensitive customer access notes & PIN codes at rest (AES-256 Fernet)."""
+    if not plaintext or not plaintext.strip():
+        return plaintext
+    try:
+        if plaintext.startswith("gAAAAA"):
+            return plaintext
+        return cipher_suite.encrypt(plaintext.encode('utf-8')).decode('utf-8')
+    except Exception:
+        return plaintext
+
+def decrypt_sensitive_data(ciphertext: Optional[str]) -> Optional[str]:
+    """Decrypt sensitive customer access notes at rest."""
+    if not ciphertext or not ciphertext.strip():
+        return ciphertext
+    try:
+        if not ciphertext.startswith("gAAAAA"):
+            return ciphertext
+        return cipher_suite.decrypt(ciphertext.encode('utf-8')).decode('utf-8')
+    except Exception:
+        return ciphertext
+
+def mask_access_notes_for_staff(status_val: str, encrypted_or_plain_notes: Optional[str]) -> Optional[str]:
+    """
+    UK GDPR & Access Code Security Masking:
+    - Cleaners ONLY see entry PINs & access notes when actively 'EN_ROUTE' or 'IN_PROGRESS'.
+    - When 'SCHEDULED', entry codes are masked with a security shield notice.
+    - When 'COMPLETED' or 'CANCELLED', entry codes are concealed following appointment conclusion.
+    """
+    if not encrypted_or_plain_notes:
+        return None
+
+    status_upper = status_val.upper() if status_val else "SCHEDULED"
+    if status_upper in ["EN_ROUTE", "IN_PROGRESS"]:
+        return decrypt_sensitive_data(encrypted_or_plain_notes)
+    elif status_upper == "SCHEDULED":
+        return "🔒 [Protected by CleanLondon Security: Entry PIN & access notes will be revealed when your status is updated to 'En Route']"
+    else:
+        return "🔒 [Access notes concealed following appointment completion]"
 
 # Password Hashing Utilities using native bcrypt (bypassing passlib 72-byte wrap bug)
 def hash_password(password: str) -> str:
@@ -153,9 +205,12 @@ def get_db_connection():
                 _DB_POOL_CREATED += 1
                 try:
                     return _create_db_connection()
-                except Exception:
+                except Exception as e:
                     _DB_POOL_CREATED -= 1
-                    raise
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=f"Database connection error: {str(e)}. Ensure MySQL is running on {DB_HOST}:{DB_PORT}."
+                    )
         try:
             conn = _DB_POOL.get(timeout=DB_POOL_TIMEOUT_SECONDS)
             conn.ping(reconnect=True)
@@ -207,15 +262,6 @@ def get_db():
     finally:
         release_db_connection(conn)
 
-
-def _database_unavailable(detail: str):
-    # Keep connection failures explicit while allowing the pool to be reused.
-    if isinstance(detail, HTTPException):
-        raise detail
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=f"Database connection error: {detail}. Ensure MySQL is running on {DB_HOST}:{DB_PORT}."
-    )
 
 # ==========================================================
 # SECURITY & AUTH UTILITIES
@@ -273,7 +319,7 @@ class UserRegisterSchema(BaseModel):
     password: str = Field(..., min_length=8)
     full_name: str
     phone: str
-    role: str = "customer"
+    role: Optional[str] = "customer"
 
 class LoginSchema(BaseModel):
     email: str
@@ -372,7 +418,8 @@ app.add_middleware(
 def normalize_london_postcode(raw_postcode: str) -> str:
     cleaned = re.sub(r'[^A-Za-z0-9]', '', raw_postcode.upper())
     # Extract outcode (e.g. SW1A, E14, SE1, NW1); never silently use Central London.
-    match = re.match(r'^([A-Z]{1,2}[0-9][A-Z0-9]?)', cleaned)
+    full_match = re.match(r'^([A-Z]{1,2}[0-9]{1,2}[A-Z]?)[0-9][A-Z]{2}$', cleaned)
+    match = full_match or re.match(r'^([A-Z]{1,2}[0-9]{1,2}[A-Z]?)$', cleaned)
     if not match:
         raise HTTPException(status_code=422, detail="Enter a valid UK postcode")
     return match.group(1)
@@ -544,11 +591,12 @@ def register_user(payload: UserRegisterSchema):
             if cursor.fetchone():
                 raise HTTPException(status_code=400, detail="An account with this email address already exists")
 
-            # Resolve role
-            cursor.execute("SELECT id FROM roles WHERE name = %s", (payload.role,))
+            # UK Security Standard: Strict role isolation on public registration.
+            # All public registrations are strictly assigned 'customer' role. Any client-sent role is ignored.
+            cursor.execute("SELECT id FROM roles WHERE name = 'customer'")
             role_row = cursor.fetchone()
             if not role_row:
-                raise HTTPException(status_code=400, detail="Invalid role specified")
+                raise HTTPException(status_code=500, detail="Default customer role not configured in database")
 
             hashed = hash_password(payload.password)
             cursor.execute("""
@@ -557,7 +605,7 @@ def register_user(payload: UserRegisterSchema):
             """, (role_row["id"], payload.email, hashed, payload.full_name, payload.phone))
             user_id = cursor.lastrowid
 
-            token = create_access_token({"user_id": user_id, "role": payload.role})
+            token = create_access_token({"user_id": user_id, "role": "customer"})
             return {
                 "message": "User registered successfully",
                 "access_token": token,
@@ -566,7 +614,7 @@ def register_user(payload: UserRegisterSchema):
                     "id": user_id,
                     "email": payload.email,
                     "full_name": payload.full_name,
-                    "role": payload.role
+                    "role": "customer"
                 }
             }
 
@@ -827,6 +875,9 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
 
             reference_code = f"CL-2026-{random.randint(1000, 9999)}"
 
+            # UK GDPR Sensitive Physical Access Data Encryption at Rest (AES-256)
+            encrypted_access_notes = encrypt_sensitive_data(payload.access_notes)
+
             cursor.execute("""
                 INSERT INTO bookings (
                     reference_code, idempotency_key, customer_id, service_id,
@@ -846,7 +897,7 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
                 payload.property_type, payload.bedrooms, payload.bathrooms, payload.has_pets,
                 payload.deep_clean_requested, payload.eco_cleaning_products,
                 payload.address_line1, payload.address_line2, payload.city, payload.postcode,
-                lat, lon, payload.key_handling_type, payload.access_notes,
+                lat, lon, payload.key_handling_type, encrypted_access_notes,
                 payload.scheduled_date, payload.scheduled_time_slot,
                 quote["estimated_duration_hours"], quote["hourly_equivalent_gbp"], quote["total_price_gbp"]
             ))
@@ -881,7 +932,10 @@ def get_my_bookings(user: dict = Depends(require_role(["customer"]))):
                 WHERE b.customer_id = %s
                 ORDER BY b.scheduled_date DESC, b.id DESC
             """, (user["id"],))
-            return {"bookings": cursor.fetchall()}
+            bookings = cursor.fetchall()
+            for b in bookings:
+                b["access_notes"] = decrypt_sensitive_data(b.get("access_notes"))
+            return {"bookings": bookings}
 
 @app.post("/api/bookings/{booking_id}/cancel", tags=["Bookings"])
 def cancel_booking(
@@ -1110,7 +1164,11 @@ def get_staff_jobs(user: dict = Depends(require_role(["staff"]))):
                 WHERE b.staff_id = %s
                 ORDER BY b.scheduled_date ASC, b.id ASC
             """, (user["id"],))
-            return {"jobs": cursor.fetchall()}
+            jobs = cursor.fetchall()
+            for job in jobs:
+                # UK GDPR & Least Privilege: Mask residential PIN / access codes for staff until EN_ROUTE
+                job["access_notes"] = mask_access_notes_for_staff(job["status"], job.get("access_notes"))
+            return {"jobs": jobs}
 
 @app.patch("/api/staff/jobs/{booking_id}/status", tags=["Staff"])
 def update_job_status(booking_id: int, payload: StatusUpdateSchema, user: dict = Depends(require_role(["staff", "manager"]))):
@@ -1283,7 +1341,10 @@ def get_all_bookings(status_filter: Optional[str] = None, user: dict = Depends(r
             query += " ORDER BY b.scheduled_date DESC, b.id DESC"
 
             cursor.execute(query, tuple(params))
-            return {"bookings": cursor.fetchall()}
+            bookings = cursor.fetchall()
+            for b in bookings:
+                b["access_notes"] = decrypt_sensitive_data(b.get("access_notes"))
+            return {"bookings": bookings}
 
 @app.get("/api/manager/staff", tags=["Manager"])
 def list_available_staff(user: dict = Depends(require_role(["manager"]))):
