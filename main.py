@@ -70,7 +70,7 @@ stripe.api_key = STRIPE_SECRET_KEY
 import bcrypt
 import base64
 import hashlib
-from cryptography.fernet import Fernet
+from cryptography.fernet import Fernet, InvalidToken
 
 # UK GDPR Sensitive Data Encryption Key (AES-256 Fernet)
 DATA_ENCRYPTION_KEY = os.getenv("DATA_ENCRYPTION_KEY")
@@ -86,22 +86,23 @@ def encrypt_sensitive_data(plaintext: Optional[str]) -> Optional[str]:
     if not plaintext or not plaintext.strip():
         return plaintext
     try:
-        if plaintext.startswith("gAAAAA"):
-            return plaintext
-        return cipher_suite.encrypt(plaintext.encode('utf-8')).decode('utf-8')
-    except Exception:
+        cipher_suite.decrypt(plaintext.encode("utf-8"))
         return plaintext
+    except (InvalidToken, ValueError, TypeError):
+        pass
+    try:
+        return cipher_suite.encrypt(plaintext.encode("utf-8")).decode("utf-8")
+    except Exception as exc:
+        raise RuntimeError("Unable to encrypt sensitive access data") from exc
 
 def decrypt_sensitive_data(ciphertext: Optional[str]) -> Optional[str]:
     """Decrypt sensitive customer access notes at rest."""
     if not ciphertext or not ciphertext.strip():
         return ciphertext
     try:
-        if not ciphertext.startswith("gAAAAA"):
-            return ciphertext
-        return cipher_suite.decrypt(ciphertext.encode('utf-8')).decode('utf-8')
-    except Exception:
-        return ciphertext
+        return cipher_suite.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+    except (InvalidToken, ValueError, TypeError, UnicodeDecodeError) as exc:
+        raise RuntimeError("Stored sensitive access data is not a valid encrypted value") from exc
 
 def mask_access_notes_for_staff(status_val: str, encrypted_or_plain_notes: Optional[str]) -> Optional[str]:
     """
@@ -120,6 +121,23 @@ def mask_access_notes_for_staff(status_val: str, encrypted_or_plain_notes: Optio
         return "🔒 [Protected by CleanLondon Security: Entry PIN & access notes will be revealed when your status is updated to 'En Route']"
     else:
         return "🔒 [Access notes concealed following appointment completion]"
+
+def migrate_plaintext_access_notes(cursor) -> None:
+    """Encrypt legacy plaintext access notes before the application serves requests."""
+    cursor.execute("""
+        SELECT id, access_notes
+        FROM bookings
+        WHERE access_notes IS NOT NULL AND TRIM(access_notes) <> ''
+    """)
+    for booking in cursor.fetchall():
+        try:
+            cipher_suite.decrypt(booking["access_notes"].encode("utf-8"))
+        except (InvalidToken, ValueError, TypeError):
+            encrypted_notes = encrypt_sensitive_data(booking["access_notes"])
+            cursor.execute(
+                "UPDATE bookings SET access_notes = %s WHERE id = %s",
+                (encrypted_notes, booking["id"]),
+            )
 
 # Password Hashing Utilities using native bcrypt (bypassing passlib 72-byte wrap bug)
 def hash_password(password: str) -> str:
@@ -2151,6 +2169,7 @@ def ensure_operational_schema():
                     INDEX idx_notification_recipient (recipient_user_id, created_at)
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
+            migrate_plaintext_access_notes(cursor)
 
 # ==========================================================
 # 8. FRONTEND STATIC ASSETS MOUNT
