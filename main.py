@@ -75,13 +75,20 @@ oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
 LONDON_POSTCODE_COORDS = {
     "SW1A": (51.5014, -0.1419, "Westminster / Buckingham Palace"),
     "SW1H": (51.4984, -0.1333, "Victoria / St James"),
+    "SW1":  (51.4984, -0.1333, "Westminster / Victoria"),
     "EC1A": (51.5190, -0.0990, "City of London / Clerkenwell"),
     "E1":   (51.5170, -0.0610, "Spitalfields / Whitechapel"),
     "E14":  (51.5050, -0.0200, "Canary Wharf / Isle of Dogs"),
     "NW1":  (51.5360, -0.1400, "Camden Town / Regent's Park"),
     "W1D":  (51.5136, -0.1330, "Soho / West End"),
+    "W1":   (51.5136, -0.1330, "West End / Mayfair"),
     "SE1":  (51.5030, -0.0900, "Southwark / London Bridge"),
     "W2":   (51.5130, -0.1760, "Paddington / Bayswater"),
+    "W8":   (51.5010, -0.1947, "Kensington / High Street"),
+    "SW3":  (51.4900, -0.1650, "Chelsea / Kings Road"),
+    "TW9":  (51.4613, -0.3037, "Richmond / Surrey Border"),
+    "WC1":  (51.5240, -0.1230, "Bloomsbury / Holborn"),
+    "SE10": (51.4820, -0.0070, "Greenwich / Maritime"),
     "N1":   (51.5370, -0.1030, "Islington / Angel"),
 }
 
@@ -208,6 +215,15 @@ class BookingCreateSchema(BaseModel):
     access_notes: Optional[str] = None
     scheduled_date: str
     scheduled_time_slot: str
+    idempotency_key: Optional[str] = None
+
+class CancelBookingSchema(BaseModel):
+    reason: Optional[str] = None
+
+class RescheduleBookingSchema(BaseModel):
+    new_date: str
+    new_time_slot: str
+    reason: Optional[str] = None
 
 class ReviewCreateSchema(BaseModel):
     rating: int = Field(..., ge=1, le=5)
@@ -273,6 +289,110 @@ def haversine_distance_miles(lat1: float, lon1: float, lat2: float, lon2: float)
          math.sin(dlon / 2) ** 2)
     c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
     return round(R * c, 2)
+
+def parse_time_slot_minutes(time_slot: str) -> tuple[int, int]:
+    """
+    Extracts start and end times in minutes from midnight.
+    e.g. '10:00 - 13:00' -> (600, 780)
+    """
+    matches = re.findall(r'(\d{1,2}):(\d{2})', time_slot)
+    if len(matches) >= 2:
+        start_min = int(matches[0][0]) * 60 + int(matches[0][1])
+        end_min = int(matches[1][0]) * 60 + int(matches[1][1])
+        return start_min, end_min
+    elif len(matches) == 1:
+        start_min = int(matches[0][0]) * 60 + int(matches[0][1])
+        return start_min, start_min + 180
+    return 540, 720
+
+def format_minutes_to_time(minutes: int) -> str:
+    h = (minutes // 60) % 24
+    m = minutes % 60
+    return f"{h:02d}:{m:02d}"
+
+def calculate_tfl_travel_buffer_minutes(postcode1: str, postcode2: str) -> int:
+    """
+    Computes realistic London TfL travel buffer between two postcodes:
+    - Same outcode: 30 minutes (local transit / building access / turnover)
+    - Different outcodes: 30 to 60 minutes based on distance across London (TfL Underground / bus)
+    """
+    out1 = normalize_london_postcode(postcode1)
+    out2 = normalize_london_postcode(postcode2)
+    if out1 == out2:
+        return 30
+
+    coords1 = LONDON_POSTCODE_COORDS.get(out1, (51.5074, -0.1278))
+    coords2 = LONDON_POSTCODE_COORDS.get(out2, (51.5074, -0.1278))
+    dist_miles = haversine_distance_miles(coords1[0], coords1[1], coords2[0], coords2[1])
+
+    # Base 30 min + 5 min per mile across London boroughs, capped at 60 mins
+    buffer_mins = int(30 + (dist_miles * 5))
+    return min(60, max(30, buffer_mins))
+
+def check_cleaner_schedule_conflict(
+    cursor,
+    cleaner_id: int,
+    target_date: str,
+    target_time_slot: str,
+    target_postcode: str,
+    exclude_booking_id: Optional[int] = None
+) -> tuple[bool, Optional[str]]:
+    """
+    Checks if a cleaner has an overlapping active booking or insufficient TfL travel buffer
+    on the target date.
+    Returns (has_conflict, reason_string).
+    """
+    target_start, target_end = parse_time_slot_minutes(target_time_slot)
+
+    query = """
+        SELECT id, reference_code, scheduled_time_slot, postcode, address_line1, status
+        FROM bookings
+        WHERE staff_id = %s
+          AND scheduled_date = %s
+          AND status IN ('SCHEDULED', 'EN_ROUTE', 'IN_PROGRESS')
+    """
+    params: list = [cleaner_id, str(target_date)]
+    if exclude_booking_id:
+        query += " AND id != %s"
+        params.append(exclude_booking_id)
+
+    cursor.execute(query, tuple(params))
+    existing_bookings = cursor.fetchall()
+
+    for eb in existing_bookings:
+        eb_start, eb_end = parse_time_slot_minutes(eb["scheduled_time_slot"])
+
+        # 1. Direct Time Overlap Check
+        if max(target_start, eb_start) < min(target_end, eb_end):
+            return True, (
+                f"Schedule Conflict: Cleaner is already assigned to active booking {eb['reference_code']} "
+                f"at {eb['address_line1']} ({eb['scheduled_time_slot']}), directly overlapping with requested slot {target_time_slot}."
+            )
+
+        # 2. London TfL Travel Buffer Check
+        buffer_mins = calculate_tfl_travel_buffer_minutes(target_postcode, eb["postcode"])
+
+        # If target slot starts after existing booking ends
+        if target_start >= eb_end:
+            earliest_allowed_start = eb_end + buffer_mins
+            if target_start < earliest_allowed_start:
+                return True, (
+                    f"TfL Travel Buffer Conflict: Cleaner finishes booking {eb['reference_code']} at {format_minutes_to_time(eb_end)} "
+                    f"in {eb['postcode']} and requires a {buffer_mins}-min TfL travel buffer to reach {target_postcode}. "
+                    f"Earliest available start time is {format_minutes_to_time(earliest_allowed_start)}."
+                )
+
+        # If target slot ends before existing booking starts
+        elif target_end <= eb_start:
+            latest_allowed_end = eb_start - buffer_mins
+            if target_end > latest_allowed_end:
+                return True, (
+                    f"TfL Travel Buffer Conflict: Cleaner has booking {eb['reference_code']} starting at {format_minutes_to_time(eb_start)} "
+                    f"in {eb['postcode']} and requires a {buffer_mins}-min TfL travel buffer from {target_postcode}. "
+                    f"Target booking must conclude by {format_minutes_to_time(latest_allowed_end)}."
+                )
+
+    return False, None
 
 # ==========================================================
 # 1. AUTHENTICATION & USER MANAGEMENT
@@ -504,6 +624,47 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
     # Calculate price based on service
     with get_db() as conn:
         with conn.cursor() as cursor:
+            # 1. Idempotency Check: Return existing booking if same idempotency_key was already processed
+            if payload.idempotency_key:
+                cursor.execute("""
+                    SELECT id, reference_code, total_price_gbp, status, payment_status, created_at
+                    FROM bookings
+                    WHERE idempotency_key = %s AND customer_id = %s
+                """, (payload.idempotency_key, user["id"]))
+                existing_idem = cursor.fetchone()
+                if existing_idem:
+                    return {
+                        "message": "Booking request recognized (idempotent replay)",
+                        "booking_id": existing_idem["id"],
+                        "reference_code": existing_idem["reference_code"],
+                        "total_price_gbp": float(existing_idem["total_price_gbp"]),
+                        "status": existing_idem["status"],
+                        "idempotent_replayed": True
+                    }
+
+            # 2. Duplicate Submission Guard: Prevent rapid double-clicks / identical overlapping bookings for same user
+            cursor.execute("""
+                SELECT id, reference_code, status, created_at
+                FROM bookings
+                WHERE customer_id = %s
+                  AND address_line1 = %s
+                  AND postcode = %s
+                  AND scheduled_date = %s
+                  AND scheduled_time_slot = %s
+                  AND status IN ('SCHEDULED', 'EN_ROUTE', 'IN_PROGRESS')
+            """, (user["id"], payload.address_line1, payload.postcode, payload.scheduled_date, payload.scheduled_time_slot))
+            duplicate_active = cursor.fetchone()
+            if duplicate_active:
+                raise HTTPException(
+                    status_code=409,
+                    detail=(
+                        f"Duplicate booking detected: You already have an active appointment "
+                        f"(Ref: {duplicate_active['reference_code']}, Status: {duplicate_active['status']}) at this address "
+                        f"for {payload.scheduled_date} ({payload.scheduled_time_slot}). "
+                        f"Please manage your existing booking or select a different time slot."
+                    )
+                )
+
             cursor.execute("SELECT * FROM services WHERE id = %s", (payload.service_id,))
             service = cursor.fetchone()
             if not service:
@@ -530,20 +691,20 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
 
             cursor.execute("""
                 INSERT INTO bookings (
-                    reference_code, customer_id, service_id,
+                    reference_code, idempotency_key, customer_id, service_id,
                     property_type, bedrooms, bathrooms, has_pets, deep_clean_requested, eco_cleaning_products,
                     address_line1, address_line2, city, postcode, latitude, longitude,
                     key_handling_type, access_notes, scheduled_date, scheduled_time_slot,
                     duration_hours, hourly_rate_gbp, total_price_gbp, status, payment_status
                 ) VALUES (
-                    %s, %s, %s,
+                    %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s,
                     %s, %s, %s, 'SCHEDULED', 'PENDING'
                 )
             """, (
-                reference_code, user["id"], payload.service_id,
+                reference_code, payload.idempotency_key, user["id"], payload.service_id,
                 payload.property_type, payload.bedrooms, payload.bathrooms, payload.has_pets,
                 payload.deep_clean_requested, payload.eco_cleaning_products,
                 payload.address_line1, payload.address_line2, payload.city, payload.postcode,
@@ -564,7 +725,8 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
                 "booking_id": booking_id,
                 "reference_code": reference_code,
                 "total_price_gbp": quote["total_price_gbp"],
-                "status": "SCHEDULED"
+                "status": "SCHEDULED",
+                "idempotent_replayed": False
             }
 
 @app.get("/api/bookings/my", tags=["Bookings"])
@@ -582,6 +744,181 @@ def get_my_bookings(user: dict = Depends(require_role(["customer"]))):
                 ORDER BY b.scheduled_date DESC, b.id DESC
             """, (user["id"],))
             return {"bookings": cursor.fetchall()}
+
+@app.post("/api/bookings/{booking_id}/cancel", tags=["Bookings"])
+def cancel_booking(
+    booking_id: int,
+    payload: Optional[CancelBookingSchema] = None,
+    user: dict = Depends(require_role(["customer", "manager"]))
+):
+    """
+    UK Consumer Protection & Booking Cancellation Workflow:
+    - Enforces strict late-cancellation penalty policy:
+      * Free cancellation & 100% refund when cancelled >24 hours before scheduled appointment.
+      * 50% late-cancellation fee retained and 50% refund when cancelled within 24 hours of appointment.
+      * Appointments cannot be cancelled after the scheduled start time has arrived.
+    - Frees up assigned cleaner and logs audit trail.
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM bookings WHERE id = %s", (booking_id,))
+            booking = cursor.fetchone()
+            if not booking:
+                raise HTTPException(status_code=404, detail="Booking not found")
+
+            # Ownership check: Customers can only cancel their own bookings
+            if user["role"] == "customer" and booking["customer_id"] != user["id"]:
+                raise HTTPException(status_code=403, detail="You can only cancel your own bookings")
+
+            if booking["status"] == "CANCELLED":
+                raise HTTPException(status_code=400, detail="This booking has already been cancelled")
+
+            if booking["status"] in ["EN_ROUTE", "IN_PROGRESS", "COMPLETED"]:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot cancel booking: Cleaner is already '{booking['status']}'. Cancellations are only permitted while status is 'SCHEDULED'."
+                )
+
+            # Parse scheduled start time
+            times = re.findall(r'(\d{1,2}:\d{2})', booking["scheduled_time_slot"])
+            start_time_str = times[0] if times else "09:00"
+            try:
+                service_dt = datetime.datetime.strptime(f"{booking['scheduled_date']} {start_time_str}:00", "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                service_dt = datetime.datetime.combine(booking["scheduled_date"], datetime.time(9, 0))
+
+            now = datetime.datetime.now()
+            hours_until_service = (service_dt - now).total_seconds() / 3600.0
+
+            if hours_until_service < 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot cancel an appointment whose scheduled start time has already passed."
+                )
+
+            total_price = float(booking["total_price_gbp"])
+            reason = payload.reason if payload and payload.reason else "Cancelled by customer"
+
+            # Late cancellation fee rule:
+            # > 24 hours: Full refund, 0 fee
+            # < 24 hours: 50% penalty fee, 50% refund
+            if hours_until_service >= 24.0:
+                cancellation_fee = 0.00
+                refund_amount = total_price
+                policy_note = f"Free cancellation (>24h notice). Full refund of £{refund_amount:.2f} issued."
+                policy_applied = "FREE_CANCELLATION"
+            else:
+                cancellation_fee = round(total_price * 0.50, 2)
+                refund_amount = round(total_price - cancellation_fee, 2)
+                policy_note = f"Late cancellation (<24h notice): 50% fee (£{cancellation_fee:.2f}) retained. Refund of £{refund_amount:.2f} issued."
+                policy_applied = "50_PERCENT_LATE_FEE"
+
+            new_payment_status = "REFUNDED" if booking["payment_status"] == "PAID" else "PENDING"
+
+            cursor.execute("""
+                UPDATE bookings
+                SET status = 'CANCELLED',
+                    payment_status = %s,
+                    cancelled_at = NOW(),
+                    cancellation_fee_gbp = %s,
+                    refund_amount_gbp = %s,
+                    cancellation_reason = %s,
+                    staff_id = NULL
+                WHERE id = %s
+            """, (new_payment_status, cancellation_fee, refund_amount, f"{reason} | {policy_note}", booking_id))
+
+            cursor.execute("""
+                INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
+                VALUES (%s, %s, %s, 'CANCELLED', %s)
+            """, (booking_id, user["id"], booking["status"], f"Booking cancelled. {policy_note} Reason: {reason}"))
+
+            return {
+                "message": "Booking cancelled successfully",
+                "booking_id": booking_id,
+                "reference_code": booking["reference_code"],
+                "status": "CANCELLED",
+                "hours_until_service": round(hours_until_service, 1),
+                "total_price_gbp": total_price,
+                "cancellation_fee_gbp": cancellation_fee,
+                "refund_amount_gbp": refund_amount,
+                "policy_applied": policy_applied,
+                "policy_note": policy_note
+            }
+
+@app.post("/api/bookings/{booking_id}/reschedule", tags=["Bookings"])
+def reschedule_booking(
+    booking_id: int,
+    payload: RescheduleBookingSchema,
+    user: dict = Depends(require_role(["customer", "manager"]))
+):
+    """
+    Rescheduling Workflow:
+    - Allows customer or manager to select a new appointment date & time slot.
+    - Re-validates that new slot is strictly in the future.
+    - Checks assigned cleaner availability on new slot (unassigns cleaner with audit note if conflict arises).
+    """
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM bookings WHERE id = %s", (booking_id,))
+            booking = cursor.fetchone()
+            if not booking:
+                raise HTTPException(status_code=404, detail="Booking not found")
+
+            if user["role"] == "customer" and booking["customer_id"] != user["id"]:
+                raise HTTPException(status_code=403, detail="You can only reschedule your own bookings")
+
+            if booking["status"] != "SCHEDULED":
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Only bookings in 'SCHEDULED' status can be rescheduled. Current status: '{booking['status']}'."
+                )
+
+            # Validate new appointment date is in future
+            times = re.findall(r'(\d{1,2}:\d{2})', payload.new_time_slot)
+            start_str = times[0] if times else "09:00"
+            try:
+                new_dt = datetime.datetime.strptime(f"{payload.new_date} {start_str}:00", "%Y-%m-%d %H:%M:%S")
+            except Exception:
+                raise HTTPException(status_code=400, detail="Invalid date or time slot format. Use YYYY-MM-DD and HH:MM - HH:MM.")
+
+            if new_dt <= datetime.datetime.now():
+                raise HTTPException(status_code=400, detail="New scheduled date and time must be in the future")
+
+            # Check if currently assigned cleaner has conflict on new slot
+            reassigned_note = ""
+            staff_id = booking["staff_id"]
+            if staff_id:
+                has_conflict, reason = check_cleaner_schedule_conflict(
+                    cursor, staff_id, payload.new_date, payload.new_time_slot, booking["postcode"], exclude_booking_id=booking_id
+                )
+                if has_conflict:
+                    staff_id = None
+                    reassigned_note = " (Assigned cleaner unavailable on new slot; cleaner unassigned for re-dispatch)"
+
+            cursor.execute("""
+                UPDATE bookings
+                SET scheduled_date = %s,
+                    scheduled_time_slot = %s,
+                    staff_id = %s
+                WHERE id = %s
+            """, (payload.new_date, payload.new_time_slot, staff_id, booking_id))
+
+            cursor.execute("""
+                INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
+                VALUES (%s, %s, 'SCHEDULED', 'SCHEDULED', %s)
+            """, (
+                booking_id, user["id"],
+                f"Rescheduled from {booking['scheduled_date']} ({booking['scheduled_time_slot']}) to {payload.new_date} ({payload.new_time_slot}){reassigned_note}."
+            ))
+
+            return {
+                "message": f"Booking rescheduled successfully to {payload.new_date} ({payload.new_time_slot}){reassigned_note}",
+                "booking_id": booking_id,
+                "reference_code": booking["reference_code"],
+                "scheduled_date": payload.new_date,
+                "scheduled_time_slot": payload.new_time_slot,
+                "cleaner_assigned": staff_id is not None
+            }
 
 @app.post("/api/bookings/{booking_id}/review", tags=["Bookings"])
 def review_booking(booking_id: int, payload: ReviewCreateSchema, user: dict = Depends(require_role(["customer"]))):
@@ -670,6 +1007,42 @@ def update_job_status(booking_id: int, payload: StatusUpdateSchema, user: dict =
                     status_code=400,
                     detail=f"Invalid transition from '{current_status}' to '{target_status}'. Allowed next: {valid_transitions.get(current_status)}"
                 )
+
+            # Time Guardrail: Prevent advancing status before scheduled appointment time
+            if target_status in ["EN_ROUTE", "IN_PROGRESS", "COMPLETED"]:
+                times = re.findall(r'(\d{1,2}:\d{2})', booking["scheduled_time_slot"])
+                start_time_str = times[0] if times else "08:00"
+                try:
+                    scheduled_dt = datetime.datetime.strptime(
+                        f"{booking['scheduled_date']} {start_time_str}:00", "%Y-%m-%d %H:%M:%S"
+                    )
+                except Exception:
+                    scheduled_dt = datetime.datetime.combine(booking["scheduled_date"], datetime.time(8, 0))
+
+                now = datetime.datetime.now()
+                hours_until_start = (scheduled_dt - now).total_seconds() / 3600.0
+
+                # 1. Cleaner cannot be EN_ROUTE more than 2 hours before scheduled start (and not on a future date)
+                if target_status == "EN_ROUTE" and hours_until_start > 2.0:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Time Guardrail: Cannot mark job 'EN_ROUTE' prematurely. "
+                            f"Appointment is scheduled for {booking['scheduled_date']} at {start_time_str} "
+                            f"({round(hours_until_start, 1)} hours away). Cleaners can only go en route within 2 hours of scheduled start."
+                        )
+                    )
+
+                # 2. Cleaner cannot be IN_PROGRESS or COMPLETED before scheduled start time
+                if target_status in ["IN_PROGRESS", "COMPLETED"] and hours_until_start > 0.25:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"Time Guardrail: Cannot mark job '{target_status}' before the scheduled appointment time. "
+                            f"Appointment is scheduled for {booking['scheduled_date']} at {start_time_str} "
+                            f"({round(hours_until_start, 1)} hours away)."
+                        )
+                    )
 
             # Update status
             payment_status = "PAID" if target_status == "COMPLETED" else booking["payment_status"]
@@ -797,6 +1170,18 @@ def assign_staff_to_booking(booking_id: int, payload: AssignStaffSchema, user: d
             if not staff:
                 raise HTTPException(status_code=404, detail="Cleaner staff not found")
 
+            cursor.execute("SELECT * FROM bookings WHERE id = %s", (booking_id,))
+            booking = cursor.fetchone()
+            if not booking:
+                raise HTTPException(status_code=404, detail="Booking not found")
+
+            # Check cleaner schedule conflict & TfL travel buffer
+            has_conflict, reason = check_cleaner_schedule_conflict(
+                cursor, payload.staff_id, booking["scheduled_date"], booking["scheduled_time_slot"], booking["postcode"], exclude_booking_id=booking_id
+            )
+            if has_conflict:
+                raise HTTPException(status_code=400, detail=reason)
+
             cursor.execute("UPDATE bookings SET staff_id = %s WHERE id = %s", (payload.staff_id, booking_id))
             cursor.execute("""
                 INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
@@ -809,7 +1194,8 @@ def assign_staff_to_booking(booking_id: int, payload: AssignStaffSchema, user: d
 def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["manager"]))):
     """
     Intelligent Proximity-Based Auto-Dispatch Algorithm:
-    Matches unassigned booking with the nearest available cleaner based on London postcodes.
+    Matches unassigned booking with the nearest available cleaner based on London postcodes,
+    verifying cleaner schedule availability and London TfL travel buffers.
     """
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -831,9 +1217,17 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
             if not cleaners:
                 raise HTTPException(status_code=400, detail="No available cleaners currently in service")
 
-            # Rank cleaners by distance
+            # Filter out cleaners with schedule conflicts or insufficient travel buffer
             ranked_cleaners = []
+            conflict_reasons = []
             for cleaner in cleaners:
+                has_conflict, reason = check_cleaner_schedule_conflict(
+                    cursor, cleaner["id"], booking["scheduled_date"], booking["scheduled_time_slot"], booking["postcode"], exclude_booking_id=booking_id
+                )
+                if has_conflict:
+                    conflict_reasons.append(f"{cleaner['full_name']}: {reason}")
+                    continue
+
                 cleaner_outcode = normalize_london_postcode(cleaner["base_postcode"])
                 cleaner_coords = LONDON_POSTCODE_COORDS.get(cleaner_outcode, (51.5030, -0.0900))
                 dist = haversine_distance_miles(
@@ -847,6 +1241,13 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
                     "rating": float(cleaner["rating_avg"])
                 })
 
+            if not ranked_cleaners:
+                conflict_summary = " | ".join(conflict_reasons[:2]) if conflict_reasons else "All cleaners are booked."
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"No conflict-free cleaners available for {booking['scheduled_date']} ({booking['scheduled_time_slot']}). {conflict_summary}"
+                )
+
             ranked_cleaners.sort(key=lambda x: (x["distance_miles"], -x["rating"]))
             best_match = ranked_cleaners[0]
 
@@ -854,7 +1255,7 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
             cursor.execute("""
                 INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
                 VALUES (%s, %s, 'SCHEDULED', 'SCHEDULED', %s)
-            """, (booking_id, user["id"], f"Auto-matched to {best_match['cleaner_name']} ({best_match['distance_miles']} miles away)"))
+            """, (booking_id, user["id"], f"Auto-matched to {best_match['cleaner_name']} ({best_match['distance_miles']} miles away, schedule conflict-free)"))
 
             return {
                 "message": f"Auto-matched booking to {best_match['cleaner_name']}",

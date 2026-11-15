@@ -507,6 +507,16 @@ async function submitNewBooking(e) {
         return;
     }
 
+    if (state.isSubmittingBooking) return;
+    state.isSubmittingBooking = true;
+
+    const submitBtn = document.querySelector("#create-booking-form button[type='submit']");
+    const origBtnHtml = submitBtn ? submitBtn.innerHTML : "Confirm Booking & Proceed to Payment";
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Securing Your Slot...';
+    }
+
     const addressLine1 = document.getElementById("book-address1").value;
     const addressLine2 = document.getElementById("book-address2").value;
     const postcode = document.getElementById("book-postcode").value;
@@ -514,6 +524,9 @@ async function submitNewBooking(e) {
     const scheduledTime = document.getElementById("book-timeslot").value;
     const keyHandling = document.getElementById("book-key-handling").value;
     const notes = document.getElementById("book-access-notes").value;
+
+    // Client-side idempotency key to prevent double charge / duplicate submission
+    const idempotencyKey = "CL-IDEM-" + Date.now() + "-" + Math.random().toString(36).substring(2, 9);
 
     const payload = {
         service_id: state.quote.service_id,
@@ -530,7 +543,8 @@ async function submitNewBooking(e) {
         key_handling_type: keyHandling,
         access_notes: notes,
         scheduled_date: scheduledDate,
-        scheduled_time_slot: scheduledTime
+        scheduled_time_slot: scheduledTime,
+        idempotency_key: idempotencyKey
     };
 
     try {
@@ -538,7 +552,8 @@ async function submitNewBooking(e) {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${state.token}`
+                "Authorization": `Bearer ${state.token}`,
+                "Idempotency-Key": idempotencyKey
             },
             body: JSON.stringify(payload)
         });
@@ -553,6 +568,12 @@ async function submitNewBooking(e) {
         }
     } catch (err) {
         alert("Booking submission failed. Please try again.");
+    } finally {
+        state.isSubmittingBooking = false;
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = origBtnHtml;
+        }
     }
 }
 
@@ -602,19 +623,37 @@ async function loadCustomerBookings() {
 
             listBody.innerHTML = data.bookings.map(b => {
                 let actionBtn = "";
-                if (b.payment_status === "PENDING") {
-                    actionBtn = `<button class="btn btn-sm btn-primary" onclick="initiateStripeCheckout(${b.id})" style="background:#635bff; border-color:#635bff;"><i class="fa-brands fa-stripe"></i> Pay £${parseFloat(b.total_price_gbp).toFixed(2)}</button>`;
+                if (b.status === "CANCELLED") {
+                    const penaltyText = b.cancellation_fee_gbp > 0 ? ` (50% fee: £${parseFloat(b.cancellation_fee_gbp).toFixed(2)})` : ' (Full refund)';
+                    actionBtn = `<span class="badge-cancelled" style="background:#fee2e2; color:#b91c1c; font-size:0.75rem; padding:4px 8px; border-radius:12px; font-weight:700;" title="${b.cancellation_reason || 'Cancelled'}"><i class="fa-solid fa-ban"></i> Cancelled${penaltyText}</span>`;
                 } else if (b.status === "COMPLETED" && !b.review_rating) {
                     actionBtn = `<button class="btn btn-sm btn-primary" onclick="openReviewModal(${b.id})"><i class="fa-solid fa-star"></i> Review</button>`;
                 } else if (b.review_rating) {
                     actionBtn = `<span class="text-gold">★ ${b.review_rating}/5 Rated</span>`;
+                } else if (b.status === "SCHEDULED") {
+                    let payPart = "";
+                    if (b.payment_status === "PENDING") {
+                        payPart = `<button class="btn btn-sm btn-primary" onclick="initiateStripeCheckout(${b.id})" style="background:#635bff; border-color:#635bff; margin-bottom:4px; font-size:0.75rem; padding:3px 7px;"><i class="fa-brands fa-stripe"></i> Pay £${parseFloat(b.total_price_gbp).toFixed(2)}</button><br>`;
+                    }
+                    actionBtn = `
+                        ${payPart}
+                        <div style="display:flex; gap:4px; flex-wrap:wrap;">
+                            <button class="btn btn-sm btn-outline-primary" onclick="openRescheduleModal(${b.id}, '${b.reference_code}', '${b.scheduled_date}', '${b.scheduled_time_slot}')" title="Reschedule Appointment" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-calendar-days"></i> Reschedule</button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${b.id}, '${b.reference_code}', '${b.scheduled_date}', '${b.scheduled_time_slot}', ${b.total_price_gbp})" title="Cancel Booking" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-ban"></i> Cancel</button>
+                        </div>
+                    `;
                 } else {
-                    actionBtn = `<span class="badge-paid" style="background:#dcfce7; color:#15803d; font-size:0.75rem; padding:4px 8px; border-radius:12px; font-weight:700;"><i class="fa-solid fa-shield-check"></i> Paid</span>`;
+                    actionBtn = `<span class="badge-active" style="background:#e0f2fe; color:#0369a1; font-size:0.75rem; padding:4px 8px; border-radius:12px; font-weight:700;"><i class="fa-solid fa-spinner fa-spin"></i> Active</span>`;
                 }
 
-                const paymentBadge = b.payment_status === "PAID" 
-                    ? `<span style="color:#15803d; font-weight:700;"><i class="fa-solid fa-check"></i> Paid</span>`
-                    : `<span style="color:#b45309; font-weight:700;"><i class="fa-solid fa-clock"></i> Pending</span>`;
+                let paymentBadge = "";
+                if (b.payment_status === "PAID") {
+                    paymentBadge = `<span style="color:#15803d; font-weight:700;"><i class="fa-solid fa-check"></i> Paid</span>`;
+                } else if (b.payment_status === "REFUNDED") {
+                    paymentBadge = `<span style="color:#64748b; font-weight:700;"><i class="fa-solid fa-rotate-left"></i> Refunded</span>`;
+                } else {
+                    paymentBadge = `<span style="color:#b45309; font-weight:700;"><i class="fa-solid fa-clock"></i> Pending</span>`;
+                }
 
                 return `
                     <tr>
@@ -632,6 +671,107 @@ async function loadCustomerBookings() {
         }
     } catch (err) {
         console.error("Load customer bookings err:", err);
+    }
+}
+
+// ==========================================================
+// CANCELLATION & RESCHEDULING ACTIONS (CUSTOMER)
+// ==========================================================
+async function cancelCustomerBooking(bookingId, refCode, scheduledDate, scheduledTimeSlot, totalPrice) {
+    // Check cancellation notice window
+    const now = new Date();
+    const startTimeStr = (scheduledTimeSlot.match(/\d{1,2}:\d{2}/) || ["09:00"])[0];
+    const serviceDate = new Date(`${scheduledDate}T${startTimeStr}:00`);
+    const hoursDiff = (serviceDate - now) / (1000 * 60 * 60);
+
+    let feeWarning = "";
+    if (hoursDiff >= 24) {
+        feeWarning = "Notice: Over 24 hours until appointment. 100% Free cancellation with full refund.";
+    } else {
+        const fee = (totalPrice * 0.5).toFixed(2);
+        const refund = (totalPrice - fee).toFixed(2);
+        feeWarning = `Late Cancellation Notice (<24 hours):\nA 50% late fee (£${fee}) applies. Refund issued: £${refund}.`;
+    }
+
+    const confirmMsg = `Are you sure you want to cancel booking ${refCode}?\n\n${feeWarning}`;
+    if (!confirm(confirmMsg)) return;
+
+    try {
+        const res = await fetch(`${API_BASE}/api/bookings/${bookingId}/cancel`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${state.token}`
+            },
+            body: JSON.stringify({ reason: "Customer requested cancellation via portal" })
+        });
+        const data = await res.json();
+        if (res.ok) {
+            alert(`Booking ${refCode} Cancelled:\n${data.policy_note}`);
+            loadCustomerBookings();
+        } else {
+            alert(`Cancellation Error: ${data.detail || "Could not cancel booking"}`);
+        }
+    } catch (err) {
+        alert("Failed to communicate with cancellation server.");
+    }
+}
+
+function openRescheduleModal(bookingId, refCode, currentDate, currentTimeSlot) {
+    document.getElementById("reschedule-booking-id").value = bookingId;
+    document.getElementById("reschedule-booking-ref-text").textContent = `Rescheduling booking ${refCode} (Current: ${currentDate} at ${currentTimeSlot})`;
+    
+    // Set min date to tomorrow
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    document.getElementById("reschedule-date").min = tomorrow.toISOString().split("T")[0];
+    document.getElementById("reschedule-date").value = tomorrow.toISOString().split("T")[0];
+
+    document.getElementById("reschedule-modal").classList.add("active");
+}
+
+function closeRescheduleModal() {
+    document.getElementById("reschedule-modal").classList.remove("active");
+}
+
+async function submitReschedule(e) {
+    e.preventDefault();
+    const bookingId = document.getElementById("reschedule-booking-id").value;
+    const newDate = document.getElementById("reschedule-date").value;
+    const newTimeslot = document.getElementById("reschedule-timeslot").value;
+
+    const submitBtn = document.getElementById("reschedule-submit-btn");
+    const origText = submitBtn.innerHTML;
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Rescheduling...';
+
+    try {
+        const res = await fetch(`${API_BASE}/api/bookings/${bookingId}/reschedule`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": `Bearer ${state.token}`
+            },
+            body: JSON.stringify({
+                new_date: newDate,
+                new_time_slot: newTimeslot,
+                reason: "Customer changed appointment slot via dashboard"
+            })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+            alert(data.message);
+            closeRescheduleModal();
+            loadCustomerBookings();
+        } else {
+            alert(`Rescheduling Failed: ${data.detail || "Could not reschedule"}`);
+        }
+    } catch (err) {
+        alert("Error submitting reschedule request.");
+    } finally {
+        submitBtn.disabled = false;
+        submitBtn.innerHTML = origText;
     }
 }
 
