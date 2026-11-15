@@ -18,12 +18,18 @@ import pymysql
 import pymysql.cursors
 import stripe
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 load_dotenv()
 
 # ==========================================================
 # CONFIGURATION & CONSTANTS
 # ==========================================================
+# --- Environment & Security Controls ---
+ENVIRONMENT = os.getenv("ENVIRONMENT", "development")
+IS_PRODUCTION = ENVIRONMENT.lower() == "production"
 DB_HOST = os.getenv("DB_HOST", "127.0.0.1")
 DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_USER = os.getenv("DB_USER", "cleanlondon_user")
@@ -34,7 +40,7 @@ JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "supersecretjwtkey_cleanlondon_prod
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 
-MOCK_MODE = os.getenv("MOCK_MODE", "true").lower() == "true"
+MOCK_MODE = False if IS_PRODUCTION else (os.getenv("MOCK_MODE", "true").lower() == "true")
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "mock-client-id.apps.googleusercontent.com")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "MOCK_GOOGLE_MAPS_KEY_LONDON")
 
@@ -222,18 +228,31 @@ class CreateCheckoutSessionSchema(BaseModel):
 # ==========================================================
 # FASTAPI APPLICATION SETUP
 # ==========================================================
+# Rate limiter setup (slowapi)
+limiter = Limiter(key_func=get_remote_address)
+
 app = FastAPI(
     title="CleanLondon API",
     description="UK Domestic Cleaning Platform - End-to-End API with Role-Based Access Control, Dynamic Pricing, and Geocoding",
-    version="1.0.0"
+    version="1.0.0",
+    # Disable interactive API docs in production to prevent schema exposure
+    docs_url=None if IS_PRODUCTION else "/docs",
+    redoc_url=None if IS_PRODUCTION else "/redoc",
+    openapi_url=None if IS_PRODUCTION else "/openapi.json",
 )
+
+# Attach rate limiter to app state
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
+    allow_headers=["Authorization", "Content-Type"],
 )
 
 # ==========================================================
@@ -294,7 +313,8 @@ def register_user(payload: UserRegisterSchema):
             }
 
 @app.post("/api/auth/login", tags=["Auth"])
-def login_user(payload: LoginSchema):
+@limiter.limit("10/minute")
+def login_user(request: Request, payload: LoginSchema):
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
@@ -377,7 +397,13 @@ def demo_switch_role(role: str = Body(..., embed=True)):
     """
     Convenience endpoint for review: Instantly generates a valid JWT
     for the Manager, Staff, or Customer demo accounts.
+    Only available in development/staging environments.
     """
+    if IS_PRODUCTION:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Not found"
+        )
     role_email_map = {
         "manager": "admin@cleanlondon.co.uk",
         "staff": "cleaner.elena@cleanlondon.co.uk",
@@ -414,7 +440,8 @@ def list_services():
             return {"services": cursor.fetchall()}
 
 @app.post("/api/pricing/calculate", tags=["Services & Quotes"])
-def calculate_quote(payload: QuoteRequestSchema):
+@limiter.limit("30/minute")
+def calculate_quote(request: Request, payload: QuoteRequestSchema):
     """
     Dynamic London Cleaning Pricing Engine:
     - Analyzes postcode outcode
@@ -422,8 +449,13 @@ def calculate_quote(payload: QuoteRequestSchema):
     - Extras: Deep clean (+£20), Pets (+£10)
     - Estimates duration in hours
     """
+    return _compute_quote(payload)
+
+
+def _compute_quote(payload: QuoteRequestSchema) -> dict:
+    """Internal pricing helper — called by the endpoint and by create_booking."""
     outcode = normalize_london_postcode(payload.postcode)
-    
+
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SELECT * FROM services WHERE id = %s", (payload.service_id,))
@@ -483,7 +515,7 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
             lat, lon = coords[0], coords[1]
 
             # Price calculations
-            quote = calculate_quote(QuoteRequestSchema(
+            quote = _compute_quote(QuoteRequestSchema(
                 postcode=payload.postcode,
                 service_id=payload.service_id,
                 property_type=payload.property_type,
