@@ -67,6 +67,7 @@ CREATE TABLE IF NOT EXISTS services (
 CREATE TABLE IF NOT EXISTS bookings (
     id INT AUTO_INCREMENT PRIMARY KEY,
     reference_code VARCHAR(20) NOT NULL UNIQUE,
+    idempotency_key VARCHAR(100) NULL UNIQUE,
     customer_id INT NOT NULL,
     staff_id INT NULL,
     service_id INT NOT NULL,
@@ -95,6 +96,10 @@ CREATE TABLE IF NOT EXISTS bookings (
     stripe_payment_intent_id VARCHAR(255) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    cancelled_at TIMESTAMP NULL,
+    cancellation_reason VARCHAR(255) NULL,
+    cancellation_fee_gbp DECIMAL(8, 2) NOT NULL DEFAULT 0.00,
+    refund_amount_gbp DECIMAL(8, 2) NOT NULL DEFAULT 0.00,
     CONSTRAINT fk_bookings_customer FOREIGN KEY (customer_id) REFERENCES users (id) ON DELETE RESTRICT,
     CONSTRAINT fk_bookings_staff FOREIGN KEY (staff_id) REFERENCES users (id) ON DELETE SET NULL,
     CONSTRAINT fk_bookings_service FOREIGN KEY (service_id) REFERENCES services (id) ON DELETE RESTRICT,

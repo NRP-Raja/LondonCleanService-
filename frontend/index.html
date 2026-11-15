@@ -619,6 +619,38 @@
         </div>
     </div>
 
+    <!-- Reschedule Modal -->
+    <div class="modal-overlay" id="reschedule-modal">
+        <div class="modal-dialog">
+            <div class="modal-header">
+                <h3><i class="fa-solid fa-calendar-days text-primary"></i> Reschedule Cleaning Service</h3>
+                <button class="modal-close" onclick="closeRescheduleModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <form id="reschedule-booking-form" onsubmit="submitReschedule(event)">
+                    <input type="hidden" id="reschedule-booking-id">
+                    <p id="reschedule-booking-ref-text" style="font-size:0.9rem; color:#475569; margin-bottom:12px;"></p>
+                    <div class="form-group">
+                        <label>New Service Date *</label>
+                        <input type="date" id="reschedule-date" required>
+                    </div>
+                    <div class="form-group">
+                        <label>New Arrival Window *</label>
+                        <select id="reschedule-timeslot" required>
+                            <option value="08:00 - 11:00">Morning (08:00 - 11:00)</option>
+                            <option value="11:30 - 14:30">Midday (11:30 - 14:30)</option>
+                            <option value="15:00 - 18:00">Afternoon (15:00 - 18:00)</option>
+                        </select>
+                    </div>
+                    <div style="background:#f1f5f9; padding:8px 12px; border-radius:6px; font-size:0.8rem; color:#475569; margin-bottom:14px;">
+                        <i class="fa-solid fa-circle-info"></i> Your cleaner will be automatically re-allocated or confirmed for this new slot.
+                    </div>
+                    <button type="submit" id="reschedule-submit-btn" class="btn btn-primary btn-block">Confirm Rescheduled Slot</button>
+                </form>
+            </div>
+        </div>
+    </div>
+
     <!-- Footer -->
     <footer class="footer">
         <div class="footer-container">

@@ -1,6 +1,8 @@
 import requests
 import json
 import sys
+import datetime
+import random
 
 BASE_URL = "http://127.0.0.1:8000"
 
@@ -50,8 +52,12 @@ def test_full_system():
     cust_headers = {"Authorization": f"Bearer {cust_token}"}
     print(f" -> PASSED: Customer authenticated as '{cust_data['user']['full_name']}' (ID: {cust_data['user']['id']}).")
 
-    # 5. Test Customer Creating a Booking
-    print("\n[Test 5] Creating New Booking for Customer...")
+    # 5. Test Customer Creating a Today Booking for Real-time Lifecycle
+    print("\n[Test 5] Creating New Booking for Customer (Today)...")
+    now_dt = datetime.datetime.now()
+    today_str = now_dt.strftime("%Y-%m-%d")
+    current_slot = f"{now_dt.hour:02d}:00 - {(now_dt.hour + 3) % 24:02d}:00"
+    unique_flat = f"Flat {random.randint(100, 999)}, 12 Kensington High Street"
     booking_payload = {
         "service_id": 1,
         "property_type": "2-Bed Flat",
@@ -60,14 +66,15 @@ def test_full_system():
         "has_pets": False,
         "deep_clean_requested": False,
         "eco_cleaning_products": True,
-        "address_line1": "Flat 8, 12 Kensington High Street",
+        "address_line1": unique_flat,
         "address_line2": "Kensington",
         "city": "London",
         "postcode": "W8 4PT",
         "key_handling_type": "CONCIERGE",
         "access_notes": "Leave keys with daytime porter under Smith.",
-        "scheduled_date": "2026-11-20",
-        "scheduled_time_slot": "10:00 - 13:00"
+        "scheduled_date": today_str,
+        "scheduled_time_slot": current_slot,
+        "idempotency_key": f"IDEM-{random.randint(100000, 999999)}"
     }
     r = requests.post(f"{BASE_URL}/api/bookings", json=booking_payload, headers=cust_headers)
     assert r.status_code == 200, f"Booking creation failed: {r.text}"
@@ -100,7 +107,8 @@ def test_full_system():
     r = requests.post(f"{BASE_URL}/api/manager/bookings/{new_booking_id}/auto-match", headers=mgr_headers)
     assert r.status_code == 200, f"Auto-match failed: {r.text}"
     match_result = r.json()
-    print(f" -> PASSED: Auto-matched booking {new_booking_id} to nearest cleaner: {match_result['cleaner_name']} ({match_result['distance_miles']} miles away, rating: ★{match_result['rating']})")
+    assigned_cleaner = match_result['cleaner_name']
+    print(f" -> PASSED: Auto-matched booking {new_booking_id} to nearest conflict-free cleaner: {assigned_cleaner} ({match_result['distance_miles']} miles away, rating: ★{match_result['rating']})")
 
     # 8. Test Cleaner Workflow & Sequential State Machine
     print("\n[Test 8] Testing Cleaner Operations & Status Machine...")
@@ -157,9 +165,139 @@ def test_full_system():
     assert "access_token" in google_res
     print(f" -> PASSED: Google OAuth login returned valid JWT for user: {google_res['user']['email']}.")
 
-    print("\n==================================================")
-    print(" ✅ ALL 11 TESTS PASSED! CLEANLONDON RUNS PERFECTLY")
-    print("==================================================")
+    # ==========================================================
+    # NEW BUSINESS LOGIC TESTS
+    # ==========================================================
+
+    # 12. Test Duplicate Booking Prevention & Idempotency
+    print("\n[Test 12] Testing Duplicate Booking Prevention & Idempotency...")
+    # 12a: Submitting exact same idempotency_key returns idempotent replay
+    r_idem = requests.post(f"{BASE_URL}/api/bookings", json=booking_payload, headers=cust_headers)
+    assert r_idem.status_code == 200, f"Expected 200 idempotent replay, got {r_idem.status_code}"
+    assert r_idem.json().get("idempotent_replayed") is True, "Idempotent replay flag missing!"
+    print(f" -> PASSED: Idempotency replay recognized (Booking ID: {r_idem.json()['booking_id']}).")
+
+    # 12b: Submitting duplicate active booking without idempotency key triggers 409 Conflict
+    # Create an active scheduled booking first
+    active_dup_payload = {
+        "service_id": 1,
+        "property_type": "2-Bed Flat",
+        "bedrooms": 2,
+        "bathrooms": 1,
+        "address_line1": "99 Abbey Road",
+        "city": "London",
+        "postcode": "NW8 9AY",
+        "scheduled_date": (datetime.date.today() + datetime.timedelta(days=3)).strftime("%Y-%m-%d"),
+        "scheduled_time_slot": "10:00 - 13:00"
+    }
+    r_first = requests.post(f"{BASE_URL}/api/bookings", json=active_dup_payload, headers=cust_headers)
+    assert r_first.status_code == 200
+    first_b_id = r_first.json()["booking_id"]
+
+    # Now attempt identical duplicate submission
+    r_dup = requests.post(f"{BASE_URL}/api/bookings", json=active_dup_payload, headers=cust_headers)
+    assert r_dup.status_code == 409, f"Expected 409 Conflict for duplicate booking, got {r_dup.status_code}"
+    print(f" -> PASSED: Duplicate booking submission blocked (HTTP 409: {r_dup.json()['detail'][:60]}...).")
+
+    # 13. Test Cleaner Schedule Conflict Bug Prevention & TfL Travel Buffer
+    print("\n[Test 13] Testing Cleaner Schedule Conflict & Travel Buffer Guard...")
+    # Assign cleaner 2 (Elena) to first_b_id (day 3, 10:00 - 13:00)
+    r_assign = requests.post(f"{BASE_URL}/api/manager/bookings/{first_b_id}/assign", json={"staff_id": 2}, headers=mgr_headers)
+    assert r_assign.status_code == 200
+
+    # Create a second booking at a different address on the EXACT same day and overlapping time slot
+    conflict_payload = {
+        "service_id": 1,
+        "property_type": "1-Bed Flat",
+        "bedrooms": 1,
+        "bathrooms": 1,
+        "address_line1": "45 Piccadilly",
+        "city": "London",
+        "postcode": "W1D 7NE",
+        "scheduled_date": active_dup_payload["scheduled_date"],
+        "scheduled_time_slot": "10:00 - 13:00"
+    }
+    r_second = requests.post(f"{BASE_URL}/api/bookings", json=conflict_payload, headers=cust_headers)
+    assert r_second.status_code == 200
+    second_b_id = r_second.json()["booking_id"]
+
+    # Attempt to assign cleaner 2 (Elena) to the overlapping second booking -> Must be BLOCKED
+    r_conflict = requests.post(f"{BASE_URL}/api/manager/bookings/{second_b_id}/assign", json={"staff_id": 2}, headers=mgr_headers)
+    assert r_conflict.status_code == 400, "Security flaw: cleaner was double-booked!"
+    assert "Schedule Conflict" in r_conflict.json()["detail"] or "TfL" in r_conflict.json()["detail"]
+    print(f" -> PASSED: Double-booking guard blocked assignment (HTTP 400: {r_conflict.json()['detail'][:65]}...).")
+
+    # 14. Test Time Guardrail on Future Job Status
+    print("\n[Test 14] Testing Time Guardrails on Future Bookings...")
+    # second_b_id is 3 days in the future! Elena or cleaner cannot mark it EN_ROUTE or COMPLETED today
+    # Auto-match it to cleaner 3 (Marcus) who is free
+    r_match2 = requests.post(f"{BASE_URL}/api/manager/bookings/{second_b_id}/auto-match", headers=mgr_headers)
+    assert r_match2.status_code == 200, f"Auto-match failed: {r_match2.text}"
+
+    # Attempt to mark this future booking EN_ROUTE today -> Must be BLOCKED
+    r_guard = requests.patch(f"{BASE_URL}/api/staff/jobs/{second_b_id}/status", json={"status": "EN_ROUTE"}, headers=mgr_headers)
+    assert r_guard.status_code == 400, "Flaw: Future booking was prematurely marked EN_ROUTE!"
+    assert "Time Guardrail" in r_guard.json()["detail"]
+    print(f" -> PASSED: Time guardrail blocked premature status change (HTTP 400: {r_guard.json()['detail'][:70]}...).")
+
+    # 15. Test Cancellation Workflow & 50% Late-Fee Policy
+    print("\n[Test 15] Testing Booking Cancellation & 50% Late-Fee Policy...")
+    # 15a: Cancel future booking (>24h notice) -> 100% Free cancellation, full refund
+    r_cancel_free = requests.post(
+        f"{BASE_URL}/api/bookings/{second_b_id}/cancel",
+        json={"reason": "Customer plans changed in advance"},
+        headers=cust_headers
+    )
+    assert r_cancel_free.status_code == 200, f"Cancellation failed: {r_cancel_free.text}"
+    cancel_data = r_cancel_free.json()
+    assert cancel_data["cancellation_fee_gbp"] == 0.0, "Expected 0 fee for >24h notice"
+    assert cancel_data["policy_applied"] == "FREE_CANCELLATION"
+    print(f" -> PASSED: >24h Free cancellation confirmed: Fee £{cancel_data['cancellation_fee_gbp']:.2f}, Refund £{cancel_data['refund_amount_gbp']:.2f}.")
+
+    # 15b: Create a booking for today (scheduled for this evening, <24h away) and cancel it -> 50% late fee applied
+    late_payload = {
+        "service_id": 1,
+        "property_type": "1-Bed Flat",
+        "bedrooms": 1,
+        "bathrooms": 1,
+        "address_line1": "10 Downing Street",
+        "city": "London",
+        "postcode": "SW1A 2AA",
+        "scheduled_date": today_str,
+        "scheduled_time_slot": "18:00 - 21:00"
+    }
+    r_late = requests.post(f"{BASE_URL}/api/bookings", json=late_payload, headers=cust_headers)
+    assert r_late.status_code == 200
+    late_b_id = r_late.json()["booking_id"]
+    late_price = r_late.json()["total_price_gbp"]
+
+    r_cancel_late = requests.post(
+        f"{BASE_URL}/api/bookings/{late_b_id}/cancel",
+        json={"reason": "Last minute emergency cancellation"},
+        headers=cust_headers
+    )
+    assert r_cancel_late.status_code == 200, f"Late cancellation failed: {r_cancel_late.text}"
+    late_data = r_cancel_late.json()
+    assert late_data["policy_applied"] == "50_PERCENT_LATE_FEE"
+    assert late_data["cancellation_fee_gbp"] == round(late_price * 0.5, 2)
+    print(f" -> PASSED: <24h Late cancellation enforced: 50% fee £{late_data['cancellation_fee_gbp']:.2f}, Refund £{late_data['refund_amount_gbp']:.2f}.")
+
+    # 16. Test Rescheduling Workflow
+    print("\n[Test 16] Testing Booking Rescheduling Workflow...")
+    # Reschedule first_b_id to day 5 in future
+    resched_date = (datetime.date.today() + datetime.timedelta(days=5)).strftime("%Y-%m-%d")
+    r_resched = requests.post(
+        f"{BASE_URL}/api/bookings/{first_b_id}/reschedule",
+        json={"new_date": resched_date, "new_time_slot": "11:30 - 14:30", "reason": "Moving appointment"},
+        headers=cust_headers
+    )
+    assert r_resched.status_code == 200, f"Reschedule failed: {r_resched.text}"
+    assert r_resched.json()["scheduled_date"] == resched_date
+    print(f" -> PASSED: Booking rescheduled to {resched_date} (11:30 - 14:30).")
+
+    print("\n==================================================================")
+    print(" ✅ ALL 16 TESTS PASSED! ALL 4 BUSINESS LOGIC CONTROLS VERIFIED")
+    print("==================================================================")
 
 if __name__ == "__main__":
     try:
