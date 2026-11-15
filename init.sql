@@ -44,9 +44,50 @@ CREATE TABLE IF NOT EXISTS staff_profiles (
     rating_count INT NOT NULL DEFAULT 0,
     is_available BOOLEAN NOT NULL DEFAULT TRUE,
     verified_dbs BOOLEAN NOT NULL DEFAULT TRUE,
+    right_to_work_verified BOOLEAN NOT NULL DEFAULT TRUE,
+    vetting_status ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'APPROVED',
+    dbs_document_ref VARCHAR(255) NULL,
+    right_to_work_document_ref VARCHAR(255) NULL,
+    vetted_at TIMESTAMP NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     CONSTRAINT fk_staff_user FOREIGN KEY (user_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 8. Cleaner Weekly Availability and Holidays
+CREATE TABLE IF NOT EXISTS staff_weekly_availability (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    staff_id INT NOT NULL,
+    day_of_week TINYINT NOT NULL CHECK (day_of_week BETWEEN 0 AND 6),
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    UNIQUE KEY uq_staff_weekly_slot (staff_id, day_of_week),
+    CONSTRAINT fk_weekly_staff FOREIGN KEY (staff_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS staff_holidays (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    staff_id INT NOT NULL,
+    holiday_date DATE NOT NULL,
+    reason VARCHAR(255) NULL,
+    UNIQUE KEY uq_staff_holiday (staff_id, holiday_date),
+    CONSTRAINT fk_holiday_staff FOREIGN KEY (staff_id) REFERENCES users (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- 9. Email/SMS-compatible notification outbox
+CREATE TABLE IF NOT EXISTS notification_outbox (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    recipient_user_id INT NULL,
+    recipient_address VARCHAR(255) NOT NULL,
+    channel ENUM('EMAIL', 'SMS') NOT NULL DEFAULT 'EMAIL',
+    subject VARCHAR(255) NOT NULL,
+    body TEXT NOT NULL,
+    status ENUM('QUEUED', 'SENT', 'FAILED') NOT NULL DEFAULT 'QUEUED',
+    error_message VARCHAR(500) NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    sent_at TIMESTAMP NULL,
+    CONSTRAINT fk_notification_user FOREIGN KEY (recipient_user_id) REFERENCES users (id) ON DELETE SET NULL,
+    INDEX idx_notification_recipient (recipient_user_id, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 -- 4. Services Table

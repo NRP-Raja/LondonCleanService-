@@ -41,11 +41,80 @@ document.addEventListener("DOMContentLoaded", async () => {
 
     // Check authentication state on page load
     await checkAuthState();
+    restoreRoute();
 });
 
 /**
+ * JWT Expiration Inspector
+ */
+function isJwtExpired(token) {
+    if (!token) return true;
+    try {
+        const parts = token.split(".");
+        if (parts.length !== 3) return true;
+        const payloadJson = atob(parts[1].replace(/-/g, "+").replace(/_/g, "/"));
+        const payload = JSON.parse(payloadJson);
+        if (!payload.exp) return false;
+        return (Date.now() / 1000) > payload.exp;
+    } catch (e) {
+        return true;
+    }
+}
+
+/**
+ * Graceful Session Expiration Handler
+ * Automatically wipes localStorage, resets UI views, displays friendly prompt, and opens login dialog
+ */
+function handleSessionExpired(customMsg) {
+    console.warn("CleanLondon session expired. Resetting authentication state.");
+    localStorage.removeItem(TOKEN_KEY);
+    state.token = null;
+    state.user = null;
+
+    // Reset active role preview button highlights
+    document.querySelectorAll(".role-btn").forEach(btn => btn.classList.remove("active"));
+
+    // Switch view back to Public Landing Page
+    applyUnauthenticatedView();
+
+    const msg = customMsg || "Your CleanLondon session has expired for your security. Please log in again.";
+
+    // Show friendly session expiration banner in login modal
+    const alertEl = document.getElementById("login-error-alert");
+    if (alertEl) {
+        alertEl.textContent = msg;
+        alertEl.classList.remove("hidden");
+    }
+
+    // Automatically open login modal for instant re-authentication
+    openLoginModal();
+}
+
+/**
+ * Centralized Authenticated Fetch Wrapper
+ * Intercepts all API calls: adds Bearer token, checks local expiration, and catches 401 responses
+ */
+async function authFetch(url, options = {}) {
+    options.headers = options.headers || {};
+    if (state.token) {
+        if (isJwtExpired(state.token)) {
+            handleSessionExpired("Your session has expired. Please sign in to continue.");
+            throw new Error("Session expired");
+        }
+        options.headers["Authorization"] = `Bearer ${state.token}`;
+    }
+
+    const response = await fetch(url, options);
+    if (response.status === 401) {
+        console.warn("API returned 401 Unauthorized for:", url);
+        handleSessionExpired("Your session has expired for your security. Please log in again.");
+    }
+    return response;
+}
+
+/**
  * Core Auth State Verifier:
- * Inspects localStorage for JWT token. If present, validates against /api/auth/me.
+ * Inspects localStorage for JWT token. Checks expiry and validates against /api/auth/me.
  * Controls whether the Public Landing Page or Private Dashboard is shown.
  */
 async function checkAuthState() {
@@ -56,6 +125,12 @@ async function checkAuthState() {
         state.token = null;
         state.user = null;
         applyUnauthenticatedView();
+        return;
+    }
+
+    // Pre-flight check: token expiration
+    if (isJwtExpired(storedToken)) {
+        handleSessionExpired("Your previous session has expired. Please sign in to access your CleanLondon account.");
         return;
     }
 
@@ -70,9 +145,9 @@ async function checkAuthState() {
             state.token = storedToken;
             state.user = data.user;
             applyAuthenticatedView();
+        } else if (response.status === 401) {
+            handleSessionExpired("Your previous session has expired. Please sign in to access your CleanLondon account.");
         } else {
-            // Token expired or invalid
-            console.warn("Stored JWT is invalid or expired. Clearing session.");
             localStorage.removeItem(TOKEN_KEY);
             state.token = null;
             state.user = null;
@@ -80,7 +155,6 @@ async function checkAuthState() {
         }
     } catch (err) {
         console.error("Network or auth check error:", err);
-        // Fallback to unauthenticated on connection failure
         applyUnauthenticatedView();
     }
 }
@@ -163,6 +237,8 @@ function applyAuthenticatedView() {
         const staffNameEl = document.getElementById("staff-profile-name");
         if (staffNameEl) staffNameEl.textContent = user.full_name;
         loadStaffJobs();
+        loadStaffSchedule();
+        loadStaffEarnings();
     } else if (role === "manager") {
         document.getElementById("manager-dashboard-view").classList.add("active");
         loadManagerData();
@@ -273,6 +349,7 @@ function handleSignOut() {
     localStorage.removeItem(TOKEN_KEY);
     state.token = null;
     state.user = null;
+    setRoute("home", null, true);
 
     // Reset customer bookings list in DOM
     const customerList = document.getElementById("customer-bookings-list");
@@ -341,22 +418,73 @@ async function handleDemoRoleSwitch(roleName) {
 // ==========================================================
 // 4. NAVIGATION & MODAL CONTROLLERS
 // ==========================================================
+function setRoute(view, modal = null, replace = false) {
+    const url = new URL(window.location.href);
+    url.hash = "";
+    url.search = "";
+    if (view && view !== "home") url.searchParams.set("view", view);
+    if (modal) url.searchParams.set("modal", modal);
+    const method = replace ? "replaceState" : "pushState";
+    window.history[method]({ view, modal }, "", `${url.pathname}${url.search}`);
+}
+
+function navigateToSection(event, sectionId) {
+    if (event) event.preventDefault();
+    setRoute("home");
+    document.getElementById("landing-view").classList.add("active");
+    document.getElementById("dashboard-view").classList.add("hidden");
+    setTimeout(() => document.getElementById(sectionId)?.scrollIntoView({ behavior: "smooth" }), 0);
+}
+
+function restoreRoute() {
+    const params = new URLSearchParams(window.location.search);
+    const view = params.get("view") || "home";
+    const modal = params.get("modal");
+    if (window.location.hash) {
+        window.history.replaceState({ view: "home" }, "", `${window.location.pathname}?view=home`);
+    }
+
+    if (view === "dashboard" && state.token && state.user) {
+        applyAuthenticatedView();
+    } else if (view !== "dashboard") {
+        navigateToHome(null);
+    } else {
+        openLoginModal();
+    }
+
+    if (modal === "login") openLoginModal();
+    if (modal === "register") openRegisterModal();
+    if (modal === "booking") openBookingModal();
+    if (modal === "reschedule") {
+        document.getElementById("reschedule-modal")?.classList.add("active");
+    }
+    if (modal === "review") {
+        document.getElementById("review-modal")?.classList.add("active");
+    }
+}
+
+window.addEventListener("popstate", restoreRoute);
+
 function openLoginModal() {
     document.getElementById("login-error-alert").classList.add("hidden");
     document.getElementById("login-modal").classList.add("active");
+    setRoute(state.user ? "dashboard" : "home", "login", true);
 }
 
 function closeLoginModal() {
     document.getElementById("login-modal").classList.remove("active");
+    setRoute(state.user ? "dashboard" : "home", null, true);
 }
 
 function openRegisterModal() {
     document.getElementById("register-error-alert").classList.add("hidden");
     document.getElementById("register-modal").classList.add("active");
+    setRoute(state.user ? "dashboard" : "home", "register", true);
 }
 
 function closeRegisterModal() {
     document.getElementById("register-modal").classList.remove("active");
+    setRoute(state.user ? "dashboard" : "home", null, true);
 }
 
 function switchToRegister(e) {
@@ -373,6 +501,7 @@ function switchToLogin(e) {
 
 function navigateToHome(e) {
     if (e) e.preventDefault();
+    setRoute("home");
     document.getElementById("landing-view").classList.add("active");
     document.getElementById("dashboard-view").classList.add("hidden");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -381,6 +510,7 @@ function navigateToHome(e) {
 function navigateToDashboard(e) {
     if (e) e.preventDefault();
     if (state.token && state.user) {
+        setRoute("dashboard");
         applyAuthenticatedView();
     } else {
         openLoginModal();
@@ -389,6 +519,7 @@ function navigateToDashboard(e) {
 
 function scrollToQuote() {
     // If on dashboard, switch to landing view first
+    setRoute("home");
     document.getElementById("landing-view").classList.add("active");
     document.getElementById("dashboard-view").classList.add("hidden");
 
@@ -494,10 +625,12 @@ function openBookingModal() {
         bookPostcode.value = state.quote.postcode;
     }
     document.getElementById("booking-modal").classList.add("active");
+    setRoute("home", "booking", true);
 }
 
 function closeBookingModal() {
     document.getElementById("booking-modal").classList.remove("active");
+    setRoute(state.user ? "dashboard" : "home", null, true);
 }
 
 async function submitNewBooking(e) {
@@ -548,11 +681,10 @@ async function submitNewBooking(e) {
     };
 
     try {
-        const res = await fetch(`${API_BASE}/api/bookings`, {
+        const res = await authFetch(`${API_BASE}/api/bookings`, {
             method: "POST",
             headers: {
                 "Content-Type": "application/json",
-                "Authorization": `Bearer ${state.token}`,
                 "Idempotency-Key": idempotencyKey
             },
             body: JSON.stringify(payload)
@@ -567,7 +699,9 @@ async function submitNewBooking(e) {
             alert(`Booking Error: ${data.detail || "Could not complete booking"}`);
         }
     } catch (err) {
-        alert("Booking submission failed. Please try again.");
+        if (err.message !== "Session expired") {
+            alert("Booking submission failed. Please try again.");
+        }
     } finally {
         state.isSubmittingBooking = false;
         if (submitBtn) {
@@ -582,12 +716,9 @@ async function submitNewBooking(e) {
  */
 async function initiateStripeCheckout(bookingId) {
     try {
-        const payRes = await fetch(`${API_BASE}/api/payments/create-checkout-session`, {
+        const payRes = await authFetch(`${API_BASE}/api/payments/create-checkout-session`, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${state.token}`
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ booking_id: parseInt(bookingId) })
         });
         const payData = await payRes.json();
@@ -599,9 +730,11 @@ async function initiateStripeCheckout(bookingId) {
             applyAuthenticatedView();
         }
     } catch (err) {
-        console.error("Stripe Checkout error:", err);
-        alert("Payment gateway error. Please try again from your dashboard.");
-        applyAuthenticatedView();
+        if (err.message !== "Session expired") {
+            console.error("Stripe Checkout error:", err);
+            alert("Payment gateway error. Please try again from your dashboard.");
+            applyAuthenticatedView();
+        }
     }
 }
 
@@ -611,12 +744,11 @@ async function loadCustomerBookings() {
     listBody.innerHTML = `<tr><td colspan="8" class="text-center">Loading your London bookings...</td></tr>`;
 
     try {
-        const res = await fetch(`${API_BASE}/api/bookings/my`, {
-            headers: { "Authorization": `Bearer ${state.token}` }
-        });
+        const res = await authFetch(`${API_BASE}/api/bookings/my`);
+        if (!res.ok) return;
         const data = await res.json();
-        if (res.ok) {
-            if (!data.bookings || data.bookings.length === 0) {
+        if (data.bookings) {
+            if (data.bookings.length === 0) {
                 listBody.innerHTML = `<tr><td colspan="8" class="text-center">No bookings found. Click "Book a Clean" to schedule one!</td></tr>`;
                 return;
             }
@@ -670,7 +802,9 @@ async function loadCustomerBookings() {
             }).join("");
         }
     } catch (err) {
-        console.error("Load customer bookings err:", err);
+        if (err.message !== "Session expired") {
+            console.error("Load customer bookings err:", err);
+        }
     }
 }
 
@@ -697,12 +831,9 @@ async function cancelCustomerBooking(bookingId, refCode, scheduledDate, schedule
     if (!confirm(confirmMsg)) return;
 
     try {
-        const res = await fetch(`${API_BASE}/api/bookings/${bookingId}/cancel`, {
+        const res = await authFetch(`${API_BASE}/api/bookings/${bookingId}/cancel`, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${state.token}`
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ reason: "Customer requested cancellation via portal" })
         });
         const data = await res.json();
@@ -713,7 +844,9 @@ async function cancelCustomerBooking(bookingId, refCode, scheduledDate, schedule
             alert(`Cancellation Error: ${data.detail || "Could not cancel booking"}`);
         }
     } catch (err) {
-        alert("Failed to communicate with cancellation server.");
+        if (err.message !== "Session expired") {
+            alert("Failed to communicate with cancellation server.");
+        }
     }
 }
 
@@ -728,10 +861,12 @@ function openRescheduleModal(bookingId, refCode, currentDate, currentTimeSlot) {
     document.getElementById("reschedule-date").value = tomorrow.toISOString().split("T")[0];
 
     document.getElementById("reschedule-modal").classList.add("active");
+    setRoute("dashboard", "reschedule", true);
 }
 
 function closeRescheduleModal() {
     document.getElementById("reschedule-modal").classList.remove("active");
+    setRoute("dashboard", null, true);
 }
 
 async function submitReschedule(e) {
@@ -746,12 +881,9 @@ async function submitReschedule(e) {
     submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Rescheduling...';
 
     try {
-        const res = await fetch(`${API_BASE}/api/bookings/${bookingId}/reschedule`, {
+        const res = await authFetch(`${API_BASE}/api/bookings/${bookingId}/reschedule`, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${state.token}`
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 new_date: newDate,
                 new_time_slot: newTimeslot,
@@ -768,7 +900,9 @@ async function submitReschedule(e) {
             alert(`Rescheduling Failed: ${data.detail || "Could not reschedule"}`);
         }
     } catch (err) {
-        alert("Error submitting reschedule request.");
+        if (err.message !== "Session expired") {
+            alert("Error submitting reschedule request.");
+        }
     } finally {
         submitBtn.disabled = false;
         submitBtn.innerHTML = origText;
@@ -781,10 +915,12 @@ async function submitReschedule(e) {
 function openReviewModal(bookingId) {
     document.getElementById("review-booking-id").value = bookingId;
     document.getElementById("review-modal").classList.add("active");
+    setRoute("dashboard", "review", true);
 }
 
 function closeReviewModal() {
     document.getElementById("review-modal").classList.remove("active");
+    setRoute("dashboard", null, true);
 }
 
 function setRating(rating) {
@@ -802,12 +938,9 @@ async function submitReview(e) {
     const comment = document.getElementById("review-comment").value;
 
     try {
-        const res = await fetch(`${API_BASE}/api/bookings/${bookingId}/review`, {
+        const res = await authFetch(`${API_BASE}/api/bookings/${bookingId}/review`, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${state.token}`
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 rating: rating,
                 comment: comment,
@@ -824,7 +957,9 @@ async function submitReview(e) {
             alert(`Error: ${data.detail}`);
         }
     } catch (err) {
-        alert("Failed to save review.");
+        if (err.message !== "Session expired") {
+            alert("Failed to save review.");
+        }
     }
 }
 
@@ -837,12 +972,11 @@ async function loadStaffJobs() {
     container.innerHTML = `<div class="p-4 text-center">Loading assigned tasks...</div>`;
 
     try {
-        const res = await fetch(`${API_BASE}/api/staff/jobs`, {
-            headers: { "Authorization": `Bearer ${state.token}` }
-        });
+        const res = await authFetch(`${API_BASE}/api/staff/jobs`);
+        if (!res.ok) return;
         const data = await res.json();
-        if (res.ok) {
-            if (!data.jobs || data.jobs.length === 0) {
+        if (data.jobs) {
+            if (data.jobs.length === 0) {
                 container.innerHTML = `<div class="p-4 text-center text-muted">No jobs assigned today. Stand by for dispatch.</div>`;
                 return;
             }
@@ -859,6 +993,12 @@ async function loadStaffJobs() {
                     nextActionBtn = `<span class="text-emerald"><i class="fa-solid fa-check"></i> Clean Completed</span>`;
                 }
 
+                // UK GDPR Access Note Display: highlight unlocked key vs masked notice
+                const isUnlocked = (j.status === "EN_ROUTE" || j.status === "IN_PROGRESS");
+                const accessNoteHtml = isUnlocked
+                    ? `<span style="color:#047857; font-weight:600;"><i class="fa-solid fa-key"></i> ${j.access_notes || 'Handover in person'}</span>`
+                    : `<span style="color:#b45309; font-size:0.75rem;"><i class="fa-solid fa-shield-halved"></i> ${j.access_notes || 'Protected'}</span>`;
+
                 return `
                     <div class="job-card ${state.activeJobForMap?.id === j.id ? 'active-selected' : ''}" onclick="selectJobForMap(${JSON.stringify(j).replace(/"/g, '&quot;')})">
                         <div class="job-card-header">
@@ -870,7 +1010,7 @@ async function loadStaffJobs() {
                         </div>
                         <div style="font-size:0.8rem; color:#64748b; margin-bottom:8px;">
                             <strong>Customer:</strong> ${j.customer_name} (${j.customer_phone})<br>
-                            <strong>Key Handover:</strong> ${j.key_handling_type} (${j.access_notes || 'No special notes'})
+                            <strong>Key Handover:</strong> ${j.key_handling_type} — ${accessNoteHtml}
                         </div>
                         <div class="job-actions-row">
                             ${nextActionBtn}
@@ -885,18 +1025,17 @@ async function loadStaffJobs() {
             }
         }
     } catch (err) {
-        console.error("Staff jobs error:", err);
+        if (err.message !== "Session expired") {
+            console.error("Staff jobs error:", err);
+        }
     }
 }
 
 async function advanceJobStatus(bookingId, targetStatus) {
     try {
-        const res = await fetch(`${API_BASE}/api/staff/jobs/${bookingId}/status`, {
+        const res = await authFetch(`${API_BASE}/api/staff/jobs/${bookingId}/status`, {
             method: "PATCH",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${state.token}`
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ status: targetStatus, notes: `Status updated by cleaner` })
         });
         const data = await res.json();
@@ -906,18 +1045,101 @@ async function advanceJobStatus(bookingId, targetStatus) {
         } else {
             alert(`Could not update status: ${data.detail}`);
         }
+
+        const STAFF_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+        async function loadStaffSchedule() {
+            const form = document.getElementById("staff-schedule-form");
+            if (!form) return;
+            try {
+                const res = await authFetch(`${API_BASE}/api/staff/schedule`);
+                if (!res.ok) return;
+                const data = await res.json();
+                const shifts = Object.fromEntries((data.weekly_availability || []).map(s => [s.day_of_week, s]));
+                form.innerHTML = STAFF_WEEKDAYS.map((day, index) => {
+                    const shift = shifts[index];
+                    return `<div class="form-row-2" style="align-items:center; margin:4px 0;">
+                        <label><input type="checkbox" class="staff-day-enabled" data-day="${index}" ${shift ? "checked" : ""}> ${day}</label>
+                        <span><input type="time" class="staff-day-start" data-day="${index}" value="${shift?.start_time || "09:00"}">
+                        &ndash; <input type="time" class="staff-day-end" data-day="${index}" value="${shift?.end_time || "17:00"}"></span>
+                    </div>`;
+                }).join("");
+                document.getElementById("staff-holidays-list").innerHTML =
+                    (data.holidays || []).map(h => `${h.holiday_date}: ${h.reason || "Unavailable"} ` +
+                        `<button class="btn btn-sm btn-outline" onclick="removeStaffHoliday('${h.holiday_date}')">Remove</button>`).join("<br>");
+            } catch (err) {
+                if (err.message !== "Session expired") console.error("Schedule load error:", err);
+            }
+        }
+
+        async function saveStaffSchedule() {
+            const schedule = [...document.querySelectorAll(".staff-day-enabled:checked")].map(input => {
+                const day = input.dataset.day;
+                return {
+                    day_of_week: Number(day),
+                    start_time: document.querySelector(`.staff-day-start[data-day="${day}"]`).value,
+                    end_time: document.querySelector(`.staff-day-end[data-day="${day}"]`).value
+                };
+            });
+            const res = await authFetch(`${API_BASE}/api/staff/schedule`, {
+                method: "PUT",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(schedule)
+            });
+            const data = await res.json();
+            alert(res.ok ? "Working hours saved." : (data.detail || "Could not save working hours."));
+        }
+
+        async function loadStaffEarnings() {
+            try {
+                const res = await authFetch(`${API_BASE}/api/staff/earnings`);
+                if (!res.ok) return;
+                const data = await res.json();
+                document.getElementById("staff-earnings-total").textContent = `£${Number(data.cleaner_earnings_gbp).toFixed(2)}`;
+                document.getElementById("staff-earnings-meta").textContent =
+                    `Completed jobs: ${data.completed_jobs} (70% cleaner share)`;
+            } catch (err) {
+                if (err.message !== "Session expired") console.error("Earnings load error:", err);
+            }
+        }
+
+        async function addStaffHoliday() {
+            const holidayDate = document.getElementById("staff-holiday-date").value;
+            const reason = document.getElementById("staff-holiday-reason").value;
+            if (!holidayDate) return alert("Choose a holiday or sick-day date.");
+            const res = await authFetch(`${API_BASE}/api/staff/holidays`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ holiday_date: holidayDate, reason })
+            });
+            const data = await res.json();
+            if (!res.ok) return alert(data.detail || "Could not save holiday.");
+            await loadStaffSchedule();
+        }
+
+        async function removeStaffHoliday(holidayDate) {
+            const res = await authFetch(`${API_BASE}/api/staff/holidays/${holidayDate}`, { method: "DELETE" });
+            if (res.ok) await loadStaffSchedule();
+        }
     } catch (err) {
-        alert("Failed to advance status.");
+        if (err.message !== "Session expired") {
+            alert("Failed to advance status.");
+        }
     }
 }
 
 function selectJobForMap(job) {
     state.activeJobForMap = job;
     document.getElementById("pin-postcode-text").textContent = `${job.postcode}`;
+    const isUnlocked = (job.status === "EN_ROUTE" || job.status === "IN_PROGRESS");
+    const accessText = isUnlocked
+        ? `<span style="color:#047857; font-weight:600;"><i class="fa-solid fa-key"></i> Key: ${job.key_handling_type} — "${job.access_notes || 'Handover in person'}"</span>`
+        : `<span style="color:#b45309; font-size:0.8rem;"><i class="fa-solid fa-shield-halved"></i> Key: ${job.key_handling_type} — "${job.access_notes || 'Protected'}"</span>`;
+
     document.getElementById("map-active-job-info").innerHTML = `
         <h4>${job.reference_code}: ${job.customer_name}</h4>
         <p><i class="fa-solid fa-location-dot"></i> ${job.address_line1}, London ${job.postcode}</p>
-        <p><i class="fa-solid fa-key"></i> Key: ${job.key_handling_type} — "${job.access_notes || 'Handover in person'}"</p>
+        <p>${accessText}</p>
     `;
     document.getElementById("transit-summary").innerHTML = `
         <i class="fa-solid fa-train-subway"></i> <strong>TfL Transit:</strong> Estimated ~15-20 mins travel from base to <strong>${job.postcode}</strong>.
@@ -932,15 +1154,48 @@ async function loadManagerData() {
     if (!state.token) return;
     loadManagerKPIs();
     loadManagerBookings();
+    loadManagerStaffVetting();
+}
+
+async function loadManagerStaffVetting() {
+    const table = document.getElementById("manager-staff-vetting-list");
+    if (!table) return;
+    const res = await authFetch(`${API_BASE}/api/manager/staff`);
+    if (!res.ok) return;
+    const data = await res.json();
+    table.innerHTML = (data.staff || []).map(staff => `
+        <tr>
+            <td>${staff.full_name}<br><small>${staff.email}</small></td>
+            <td><input type="checkbox" id="dbs-${staff.id}" ${staff.verified_dbs ? "checked" : ""}></td>
+            <td><input type="checkbox" id="rtw-${staff.id}" ${staff.right_to_work_verified ? "checked" : ""}></td>
+            <td>${staff.vetting_status || "PENDING"}</td>
+            <td><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${staff.id})">Save & Activate</button></td>
+        </tr>`).join("");
+}
+
+async function updateStaffVetting(staffId) {
+    const dbs = document.getElementById(`dbs-${staffId}`).checked;
+    const rtw = document.getElementById(`rtw-${staffId}`).checked;
+    const res = await authFetch(`${API_BASE}/api/manager/staff/${staffId}/vetting`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+            verified_dbs: dbs,
+            right_to_work_verified: rtw,
+            vetting_status: dbs && rtw ? "APPROVED" : "PENDING"
+        })
+    });
+    const data = await res.json();
+    alert(res.ok ? "Vetting record saved." : (data.detail || "Could not save vetting."));
+    if (res.ok) loadManagerStaffVetting();
 }
 
 async function loadManagerKPIs() {
     try {
-        const res = await fetch(`${API_BASE}/api/manager/dashboard-stats`, {
-            headers: { "Authorization": `Bearer ${state.token}` }
-        });
+        const res = await authFetch(`${API_BASE}/api/manager/dashboard-stats`);
+        if (!res.ok) return;
         const data = await res.json();
-        if (res.ok) {
+        if (data.kpis) {
             document.getElementById("kpi-daily-rev").textContent = `£${data.kpis.daily_revenue_gbp.toFixed(2)}`;
             document.getElementById("kpi-monthly-rev").textContent = `£${data.kpis.total_revenue_gbp.toFixed(2)}`;
             document.getElementById("kpi-utilization").textContent = `${data.kpis.staff_utilization_pct}%`;
@@ -948,7 +1203,9 @@ async function loadManagerKPIs() {
             document.getElementById("kpi-unassigned-count").textContent = data.kpis.unassigned_jobs;
         }
     } catch (err) {
-        console.error("Manager KPIs error:", err);
+        if (err.message !== "Session expired") {
+            console.error("Manager KPIs error:", err);
+        }
     }
 }
 
@@ -958,12 +1215,11 @@ async function loadManagerBookings() {
     tableBody.innerHTML = `<tr><td colspan="9" class="text-center">Loading platform bookings...</td></tr>`;
 
     try {
-        const res = await fetch(`${API_BASE}/api/manager/bookings?status_filter=${filter}`, {
-            headers: { "Authorization": `Bearer ${state.token}` }
-        });
+        const res = await authFetch(`${API_BASE}/api/manager/bookings?status_filter=${filter}`);
+        if (!res.ok) return;
         const data = await res.json();
-        if (res.ok) {
-            if (!data.bookings || data.bookings.length === 0) {
+        if (data.bookings) {
+            if (data.bookings.length === 0) {
                 tableBody.innerHTML = `<tr><td colspan="9" class="text-center">No bookings found for filter: ${filter}</td></tr>`;
                 return;
             }
@@ -1002,15 +1258,16 @@ async function loadManagerBookings() {
             }).join("");
         }
     } catch (err) {
-        console.error("Manager bookings load error:", err);
+        if (err.message !== "Session expired") {
+            console.error("Manager bookings load error:", err);
+        }
     }
 }
 
 async function autoMatchCleaner(bookingId) {
     try {
-        const res = await fetch(`${API_BASE}/api/manager/bookings/${bookingId}/auto-match`, {
-            method: "POST",
-            headers: { "Authorization": `Bearer ${state.token}` }
+        const res = await authFetch(`${API_BASE}/api/manager/bookings/${bookingId}/auto-match`, {
+            method: "POST"
         });
         const data = await res.json();
         if (res.ok) {
@@ -1020,19 +1277,18 @@ async function autoMatchCleaner(bookingId) {
             alert(`Auto-match error: ${data.detail}`);
         }
     } catch (err) {
-        alert("Failed to auto-match cleaner.");
+        if (err.message !== "Session expired") {
+            alert("Failed to auto-match cleaner.");
+        }
     }
 }
 
 async function manuallyReassign(bookingId, staffId) {
     if (!staffId) return;
     try {
-        const res = await fetch(`${API_BASE}/api/manager/bookings/${bookingId}/assign`, {
+        const res = await authFetch(`${API_BASE}/api/manager/bookings/${bookingId}/reassign`, {
             method: "POST",
-            headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${state.token}`
-            },
+            headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ staff_id: parseInt(staffId) })
         });
         const data = await res.json();
@@ -1043,6 +1299,8 @@ async function manuallyReassign(bookingId, staffId) {
             alert(`Assign error: ${data.detail}`);
         }
     } catch (err) {
-        alert("Manual assignment failed.");
+        if (err.message !== "Session expired") {
+            alert("Manual assignment failed.");
+        }
     }
 }

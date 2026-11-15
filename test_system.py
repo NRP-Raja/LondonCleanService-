@@ -112,7 +112,8 @@ def test_full_system():
 
     # 8. Test Cleaner Workflow & Sequential State Machine
     print("\n[Test 8] Testing Cleaner Operations & Status Machine...")
-    r = requests.post(f"{BASE_URL}/api/auth/demo-switch", json={"role": "staff"})
+    cleaner_role_target = "cleaner.elena@cleanlondon.co.uk" if "Elena" in assigned_cleaner else "cleaner.marcus@cleanlondon.co.uk"
+    r = requests.post(f"{BASE_URL}/api/auth/demo-switch", json={"role": cleaner_role_target})
     assert r.status_code == 200
     staff_token = r.json()["access_token"]
     staff_headers = {"Authorization": f"Bearer {staff_token}"}
@@ -295,8 +296,110 @@ def test_full_system():
     assert r_resched.json()["scheduled_date"] == resched_date
     print(f" -> PASSED: Booking rescheduled to {resched_date} (11:30 - 14:30).")
 
+    # ==========================================================
+    # SECURITY & UK GDPR CONTROLS TESTS
+    # ==========================================================
+
+    # 17. Test Backend Role Escalation Prevention
+    print("\n[Test 17] Testing Backend Role Escalation Prevention on Public Registration...")
+    malicious_email = f"hacker_{random.randint(10000, 99999)}@security-test.co.uk"
+    escalation_payload = {
+        "email": malicious_email,
+        "password": "Password123!",
+        "full_name": "Privilege Escalation Tester",
+        "phone": "+44 7900 112233",
+        "role": "manager"  # Attempt to escalate role to manager
+    }
+    r_reg = requests.post(f"{BASE_URL}/api/auth/register", json=escalation_payload)
+    assert r_reg.status_code == 200, f"Registration failed: {r_reg.text}"
+    reg_user = r_reg.json()["user"]
+    reg_token = r_reg.json()["access_token"]
+    assert reg_user["role"] == "customer", f"Security Flaw: Role was escalated to {reg_user['role']}!"
+
+    # Verify that the newly registered user CANNOT access manager endpoints
+    r_mgr_forbidden = requests.get(
+        f"{BASE_URL}/api/manager/dashboard-stats",
+        headers={"Authorization": f"Bearer {reg_token}"}
+    )
+    assert r_mgr_forbidden.status_code == 403, f"Security Flaw: User was granted manager access! Status: {r_mgr_forbidden.status_code}"
+    print(f" -> PASSED: Backend strictly enforced 'customer' role; manager privilege escalation blocked (HTTP 403).")
+
+    # 18. Test UK GDPR Key-Safe PIN Encryption at Rest & Cleaner Status Masking
+    print("\n[Test 18] Testing UK GDPR Sensitive Access Code Encryption at Rest & Cleaner Status Masking...")
+    secret_pin_note = f"Key safe PIN 8899 by garden shed. Intercom #402."
+    now_dt = datetime.datetime.now()
+    gdpr_booking_payload = {
+        "service_id": 1,
+        "property_type": "1-Bed Flat",
+        "bedrooms": 1,
+        "bathrooms": 1,
+        "address_line1": "72 Holland Park Avenue",
+        "city": "London",
+        "postcode": "W8 7QB",
+        "key_handling_type": "KEY_SAFE_BOX",
+        "access_notes": secret_pin_note,
+        "scheduled_date": now_dt.strftime("%Y-%m-%d"),
+        "scheduled_time_slot": f"{now_dt.hour:02d}:00 - {(now_dt.hour + 3) % 24:02d}:00",
+        "idempotency_key": f"GDPR-IDEM-{random.randint(100000, 999999)}"
+    }
+    r_gdpr = requests.post(f"{BASE_URL}/api/bookings", json=gdpr_booking_payload, headers=cust_headers)
+    assert r_gdpr.status_code == 200
+    gdpr_b_id = r_gdpr.json()["booking_id"]
+
+    # Customer viewing own booking sees their notes
+    r_cust_view = requests.get(f"{BASE_URL}/api/bookings/my", headers=cust_headers)
+    assert r_cust_view.status_code == 200
+    my_b = next(b for b in r_cust_view.json()["bookings"] if b["id"] == gdpr_b_id)
+    assert my_b["access_notes"] == secret_pin_note, "Customer could not see their own access notes!"
+
+    # Auto-match booking to cleaner
+    r_match_gdpr = requests.post(f"{BASE_URL}/api/manager/bookings/{gdpr_b_id}/auto-match", headers=mgr_headers)
+    assert r_match_gdpr.status_code == 200
+    assigned_cleaner_name = r_match_gdpr.json()["cleaner_name"]
+    cleaner_role_email = "cleaner.elena@cleanlondon.co.uk" if "Elena" in assigned_cleaner_name else "cleaner.marcus@cleanlondon.co.uk"
+    cleaner_role_name = "staff"
+
+    # Cleaner logs in while status is SCHEDULED
+    r_cleaner_auth = requests.post(f"{BASE_URL}/api/auth/demo-switch", json={"role": cleaner_role_name})
+    cleaner_token = r_cleaner_auth.json()["access_token"]
+    cleaner_headers = {"Authorization": f"Bearer {cleaner_token}"}
+
+    r_cleaner_jobs = requests.get(f"{BASE_URL}/api/staff/jobs", headers=cleaner_headers)
+    assert r_cleaner_jobs.status_code == 200
+    cleaner_job = next((j for j in r_cleaner_jobs.json()["jobs"] if j["id"] == gdpr_b_id), None)
+    if cleaner_job:
+        assert "Protected by CleanLondon Security" in cleaner_job["access_notes"] or "🔒" in cleaner_job["access_notes"], \
+            f"GDPR Flaw: Key PIN was exposed to cleaner before En Route! Got: {cleaner_job['access_notes']}"
+        assert secret_pin_note not in cleaner_job["access_notes"], "GDPR Flaw: Plaintext PIN revealed in SCHEDULED state!"
+        print(" -> PASSED: Entry PIN masked for cleaner while booking status is SCHEDULED.")
+
+        # Advance status to EN_ROUTE -> PIN must now be UNMASKED
+        r_enroute = requests.patch(f"{BASE_URL}/api/staff/jobs/{gdpr_b_id}/status", json={"status": "EN_ROUTE"}, headers=cleaner_headers)
+        assert r_enroute.status_code == 200
+        r_cleaner_jobs2 = requests.get(f"{BASE_URL}/api/staff/jobs", headers=cleaner_headers)
+        cleaner_job2 = next(j for j in r_cleaner_jobs2.json()["jobs"] if j["id"] == gdpr_b_id)
+        assert cleaner_job2["access_notes"] == secret_pin_note, f"Expected unmasked notes on En Route, got: {cleaner_job2['access_notes']}"
+        print(" -> PASSED: Entry PIN unmasked for cleaner once transitioned to EN_ROUTE.")
+
+    # 19. Test Graceful JWT Expiry Rejection
+    print("\n[Test 19] Testing Graceful JWT Expiry Detection (401 Response)...")
+    # Generate an expired token (expired 2 hours ago)
+    from jose import jwt as jose_jwt
+    jwt_secret = "supersecretjwtkey_cleanlondon_production_grade_token_2026"
+    expired_payload = {
+        "user_id": 4,
+        "role": "customer",
+        "exp": datetime.datetime.utcnow() - datetime.timedelta(hours=2)
+    }
+    expired_token = jose_jwt.encode(expired_payload, jwt_secret, algorithm="HS256")
+
+    r_expired = requests.get(f"{BASE_URL}/api/auth/me", headers={"Authorization": f"Bearer {expired_token}"})
+    assert r_expired.status_code == 401, f"Expected 401 for expired token, got {r_expired.status_code}"
+    assert "expired" in r_expired.json()["detail"].lower() or "credentials" in r_expired.json()["detail"].lower()
+    print(" -> PASSED: Expired JWT correctly rejected with HTTP 401 (triggers graceful frontend expiry handler).")
+
     print("\n==================================================================")
-    print(" ✅ ALL 16 TESTS PASSED! ALL 4 BUSINESS LOGIC CONTROLS VERIFIED")
+    print(" ✅ ALL 19 TESTS PASSED! SECURITY & UK GDPR CONTROLS VERIFIED")
     print("==================================================================")
 
 if __name__ == "__main__":

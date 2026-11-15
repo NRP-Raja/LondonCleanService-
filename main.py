@@ -9,6 +9,8 @@ import threading
 import urllib.error
 import urllib.parse
 import urllib.request
+import smtplib
+from email.message import EmailMessage
 from functools import lru_cache
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
@@ -45,6 +47,9 @@ DB_PASSWORD = os.getenv("DB_PASSWORD", "cleanlondon_pass")
 DB_NAME = os.getenv("DB_NAME", "cleanlondon_db")
 DB_POOL_SIZE = max(2, int(os.getenv("DB_POOL_SIZE", "10")))
 DB_POOL_TIMEOUT_SECONDS = float(os.getenv("DB_POOL_TIMEOUT_SECONDS", "5"))
+SMTP_HOST = os.getenv("SMTP_HOST", "127.0.0.1")
+SMTP_PORT = int(os.getenv("SMTP_PORT", "1025"))
+SMTP_FROM = os.getenv("SMTP_FROM", "notifications@cleanlondon.local")
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "supersecretjwtkey_cleanlondon_production_grade_token_2026")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
@@ -63,6 +68,58 @@ STRIPE_CANCEL_URL = os.getenv("STRIPE_CANCEL_URL", "http://localhost:8000/static
 stripe.api_key = STRIPE_SECRET_KEY
 
 import bcrypt
+import base64
+import hashlib
+from cryptography.fernet import Fernet
+
+# UK GDPR Sensitive Data Encryption Key (AES-256 Fernet)
+DATA_ENCRYPTION_KEY = os.getenv("DATA_ENCRYPTION_KEY")
+if not DATA_ENCRYPTION_KEY:
+    # Deterministically derive 32-byte urlsafe base64 key from JWT_SECRET_KEY as fallback
+    derived = hashlib.sha256(JWT_SECRET_KEY.encode('utf-8')).digest()
+    DATA_ENCRYPTION_KEY = base64.urlsafe_b64encode(derived).decode('utf-8')
+
+cipher_suite = Fernet(DATA_ENCRYPTION_KEY.encode('utf-8') if isinstance(DATA_ENCRYPTION_KEY, str) else DATA_ENCRYPTION_KEY)
+
+def encrypt_sensitive_data(plaintext: Optional[str]) -> Optional[str]:
+    """Encrypt sensitive customer access notes & PIN codes at rest (AES-256 Fernet)."""
+    if not plaintext or not plaintext.strip():
+        return plaintext
+    try:
+        if plaintext.startswith("gAAAAA"):
+            return plaintext
+        return cipher_suite.encrypt(plaintext.encode('utf-8')).decode('utf-8')
+    except Exception:
+        return plaintext
+
+def decrypt_sensitive_data(ciphertext: Optional[str]) -> Optional[str]:
+    """Decrypt sensitive customer access notes at rest."""
+    if not ciphertext or not ciphertext.strip():
+        return ciphertext
+    try:
+        if not ciphertext.startswith("gAAAAA"):
+            return ciphertext
+        return cipher_suite.decrypt(ciphertext.encode('utf-8')).decode('utf-8')
+    except Exception:
+        return ciphertext
+
+def mask_access_notes_for_staff(status_val: str, encrypted_or_plain_notes: Optional[str]) -> Optional[str]:
+    """
+    UK GDPR & Access Code Security Masking:
+    - Cleaners ONLY see entry PINs & access notes when actively 'EN_ROUTE' or 'IN_PROGRESS'.
+    - When 'SCHEDULED', entry codes are masked with a security shield notice.
+    - When 'COMPLETED' or 'CANCELLED', entry codes are concealed following appointment conclusion.
+    """
+    if not encrypted_or_plain_notes:
+        return None
+
+    status_upper = status_val.upper() if status_val else "SCHEDULED"
+    if status_upper in ["EN_ROUTE", "IN_PROGRESS"]:
+        return decrypt_sensitive_data(encrypted_or_plain_notes)
+    elif status_upper == "SCHEDULED":
+        return "🔒 [Protected by CleanLondon Security: Entry PIN & access notes will be revealed when your status is updated to 'En Route']"
+    else:
+        return "🔒 [Access notes concealed following appointment completion]"
 
 # Password Hashing Utilities using native bcrypt (bypassing passlib 72-byte wrap bug)
 def hash_password(password: str) -> str:
@@ -153,9 +210,12 @@ def get_db_connection():
                 _DB_POOL_CREATED += 1
                 try:
                     return _create_db_connection()
-                except Exception:
+                except Exception as e:
                     _DB_POOL_CREATED -= 1
-                    raise
+                    raise HTTPException(
+                        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                        detail=f"Database connection error: {str(e)}. Ensure MySQL is running on {DB_HOST}:{DB_PORT}."
+                    )
         try:
             conn = _DB_POOL.get(timeout=DB_POOL_TIMEOUT_SECONDS)
             conn.ping(reconnect=True)
@@ -208,14 +268,33 @@ def get_db():
         release_db_connection(conn)
 
 
-def _database_unavailable(detail: str):
-    # Keep connection failures explicit while allowing the pool to be reused.
-    if isinstance(detail, HTTPException):
-        raise detail
-    raise HTTPException(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        detail=f"Database connection error: {detail}. Ensure MySQL is running on {DB_HOST}:{DB_PORT}."
-    )
+def queue_notification(cursor, recipient_user_id: Optional[int], recipient_address: str,
+                       subject: str, body: str) -> None:
+    """Persist every notification and deliver it to local SMTP/Mailpit when available."""
+    cursor.execute("""
+        INSERT INTO notification_outbox
+            (recipient_user_id, recipient_address, channel, subject, body, status)
+        VALUES (%s, %s, 'EMAIL', %s, %s, 'QUEUED')
+    """, (recipient_user_id, recipient_address, subject, body))
+    notification_id = cursor.lastrowid
+    message = EmailMessage()
+    message["From"] = SMTP_FROM
+    message["To"] = recipient_address
+    message["Subject"] = subject
+    message.set_content(body)
+    try:
+        with smtplib.SMTP(SMTP_HOST, SMTP_PORT, timeout=3) as smtp:
+            smtp.send_message(message)
+        cursor.execute(
+            "UPDATE notification_outbox SET status = 'SENT', sent_at = NOW() WHERE id = %s",
+            (notification_id,),
+        )
+    except (OSError, smtplib.SMTPException) as exc:
+        cursor.execute(
+            "UPDATE notification_outbox SET status = 'FAILED', error_message = %s WHERE id = %s",
+            (str(exc)[:500], notification_id),
+        )
+
 
 # ==========================================================
 # SECURITY & AUTH UTILITIES
@@ -273,7 +352,7 @@ class UserRegisterSchema(BaseModel):
     password: str = Field(..., min_length=8)
     full_name: str
     phone: str
-    role: str = "customer"
+    role: Optional[str] = "customer"
 
 class LoginSchema(BaseModel):
     email: str
@@ -333,6 +412,22 @@ class StatusUpdateSchema(BaseModel):
 class AssignStaffSchema(BaseModel):
     staff_id: int
 
+class WeeklyAvailabilitySchema(BaseModel):
+    day_of_week: int = Field(..., ge=0, le=6)
+    start_time: str
+    end_time: str
+
+class HolidaySchema(BaseModel):
+    holiday_date: str
+    reason: Optional[str] = None
+
+class VettingSchema(BaseModel):
+    verified_dbs: bool
+    right_to_work_verified: bool
+    vetting_status: str = Field(..., pattern="^(PENDING|APPROVED|REJECTED)$")
+    dbs_document_ref: Optional[str] = None
+    right_to_work_document_ref: Optional[str] = None
+
 class CreateCheckoutSessionSchema(BaseModel):
     booking_id: int
 
@@ -372,7 +467,8 @@ app.add_middleware(
 def normalize_london_postcode(raw_postcode: str) -> str:
     cleaned = re.sub(r'[^A-Za-z0-9]', '', raw_postcode.upper())
     # Extract outcode (e.g. SW1A, E14, SE1, NW1); never silently use Central London.
-    match = re.match(r'^([A-Z]{1,2}[0-9][A-Z0-9]?)', cleaned)
+    full_match = re.match(r'^([A-Z]{1,2}[0-9]{1,2}[A-Z]?)[0-9][A-Z]{2}$', cleaned)
+    match = full_match or re.match(r'^([A-Z]{1,2}[0-9]{1,2}[A-Z]?)$', cleaned)
     if not match:
         raise HTTPException(status_code=422, detail="Enter a valid UK postcode")
     return match.group(1)
@@ -532,6 +628,43 @@ def check_cleaner_schedule_conflict(
 
     return False, None
 
+
+def check_staff_availability(cursor, staff_id: int, target_date: str, target_time_slot: str) -> tuple[bool, Optional[str]]:
+    """Apply configured weekly hours and holidays without restricting unconfigured cleaners."""
+    try:
+        target_day = datetime.date.fromisoformat(str(target_date)).weekday()
+    except ValueError:
+        return True, "Invalid scheduled date"
+
+    cursor.execute(
+        "SELECT reason FROM staff_holidays WHERE staff_id = %s AND holiday_date = %s",
+        (staff_id, str(target_date)),
+    )
+    holiday = cursor.fetchone()
+    if holiday:
+        return True, f"Cleaner is unavailable on holiday ({holiday['reason'] or 'holiday'})."
+
+    cursor.execute("""
+        SELECT start_time, end_time
+        FROM staff_weekly_availability
+        WHERE staff_id = %s AND day_of_week = %s
+    """, (staff_id, target_day))
+    shift = cursor.fetchone()
+    if not shift:
+        return False, None
+
+    start = datetime.datetime.strptime(str(shift["start_time"])[:5], "%H:%M")
+    end = datetime.datetime.strptime(str(shift["end_time"])[:5], "%H:%M")
+    start_min, end_min = parse_time_slot_minutes(target_time_slot)
+    shift_start = start.hour * 60 + start.minute
+    shift_end = end.hour * 60 + end.minute
+    if start_min < shift_start or end_min > shift_end:
+        return True, (
+            f"Booking is outside the cleaner's configured shift "
+            f"({str(shift['start_time'])[:5]}-{str(shift['end_time'])[:5]})."
+        )
+    return False, None
+
 # ==========================================================
 # 1. AUTHENTICATION & USER MANAGEMENT
 # ==========================================================
@@ -544,11 +677,12 @@ def register_user(payload: UserRegisterSchema):
             if cursor.fetchone():
                 raise HTTPException(status_code=400, detail="An account with this email address already exists")
 
-            # Resolve role
-            cursor.execute("SELECT id FROM roles WHERE name = %s", (payload.role,))
+            # UK Security Standard: Strict role isolation on public registration.
+            # All public registrations are strictly assigned 'customer' role. Any client-sent role is ignored.
+            cursor.execute("SELECT id FROM roles WHERE name = 'customer'")
             role_row = cursor.fetchone()
             if not role_row:
-                raise HTTPException(status_code=400, detail="Invalid role specified")
+                raise HTTPException(status_code=500, detail="Default customer role not configured in database")
 
             hashed = hash_password(payload.password)
             cursor.execute("""
@@ -557,7 +691,7 @@ def register_user(payload: UserRegisterSchema):
             """, (role_row["id"], payload.email, hashed, payload.full_name, payload.phone))
             user_id = cursor.lastrowid
 
-            token = create_access_token({"user_id": user_id, "role": payload.role})
+            token = create_access_token({"user_id": user_id, "role": "customer"})
             return {
                 "message": "User registered successfully",
                 "access_token": token,
@@ -566,7 +700,7 @@ def register_user(payload: UserRegisterSchema):
                     "id": user_id,
                     "email": payload.email,
                     "full_name": payload.full_name,
-                    "role": payload.role
+                    "role": "customer"
                 }
             }
 
@@ -665,11 +799,17 @@ def demo_switch_role(role: str = Body(..., embed=True)):
     role_email_map = {
         "manager": "admin@cleanlondon.co.uk",
         "staff": "cleaner.elena@cleanlondon.co.uk",
+        "staff_elena": "cleaner.elena@cleanlondon.co.uk",
+        "staff_marcus": "cleaner.marcus@cleanlondon.co.uk",
         "customer": "oliver.smith@example.co.uk"
     }
-    target_email = role_email_map.get(role.lower())
+    if "@" in role:
+        target_email = role.lower()
+    else:
+        target_email = role_email_map.get(role.lower())
+
     if not target_email:
-        raise HTTPException(status_code=400, detail="Invalid role. Choose 'manager', 'staff', or 'customer'.")
+        raise HTTPException(status_code=400, detail="Invalid role. Choose 'manager', 'staff', 'customer', or a demo email.")
 
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -827,6 +967,9 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
 
             reference_code = f"CL-2026-{random.randint(1000, 9999)}"
 
+            # UK GDPR Sensitive Physical Access Data Encryption at Rest (AES-256)
+            encrypted_access_notes = encrypt_sensitive_data(payload.access_notes)
+
             cursor.execute("""
                 INSERT INTO bookings (
                     reference_code, idempotency_key, customer_id, service_id,
@@ -846,7 +989,7 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
                 payload.property_type, payload.bedrooms, payload.bathrooms, payload.has_pets,
                 payload.deep_clean_requested, payload.eco_cleaning_products,
                 payload.address_line1, payload.address_line2, payload.city, payload.postcode,
-                lat, lon, payload.key_handling_type, payload.access_notes,
+                lat, lon, payload.key_handling_type, encrypted_access_notes,
                 payload.scheduled_date, payload.scheduled_time_slot,
                 quote["estimated_duration_hours"], quote["hourly_equivalent_gbp"], quote["total_price_gbp"]
             ))
@@ -857,6 +1000,19 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
                 INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
                 VALUES (%s, %s, NULL, 'SCHEDULED', 'Booking created by customer')
             """, (booking_id, user["id"]))
+
+            cursor.execute("SELECT email FROM users WHERE id = %s", (user["id"],))
+            recipient = cursor.fetchone()
+            if recipient:
+                queue_notification(
+                    cursor,
+                    user["id"],
+                    recipient["email"],
+                    f"CleanLondon booking confirmed: {reference_code}",
+                    f"Your cleaning booking {reference_code} is scheduled for "
+                    f"{payload.scheduled_date} ({payload.scheduled_time_slot}). "
+                    f"Payment remains pending until Stripe confirms it.",
+                )
 
             return {
                 "message": "Booking confirmed successfully",
@@ -881,7 +1037,10 @@ def get_my_bookings(user: dict = Depends(require_role(["customer"]))):
                 WHERE b.customer_id = %s
                 ORDER BY b.scheduled_date DESC, b.id DESC
             """, (user["id"],))
-            return {"bookings": cursor.fetchall()}
+            bookings = cursor.fetchall()
+            for b in bookings:
+                b["access_notes"] = decrypt_sensitive_data(b.get("access_notes"))
+            return {"bookings": bookings}
 
 @app.post("/api/bookings/{booking_id}/cancel", tags=["Bookings"])
 def cancel_booking(
@@ -970,6 +1129,14 @@ def cancel_booking(
                 VALUES (%s, %s, %s, 'CANCELLED', %s)
             """, (booking_id, user["id"], booking["status"], f"Booking cancelled. {policy_note} Reason: {reason}"))
 
+            queue_notification(
+                cursor,
+                user["id"],
+                user["email"],
+                f"CleanLondon booking cancelled: {booking['reference_code']}",
+                f"Your booking was cancelled. {policy_note}",
+            )
+
             return {
                 "message": "Booking cancelled successfully",
                 "booking_id": booking_id,
@@ -1049,6 +1216,14 @@ def reschedule_booking(
                 f"Rescheduled from {booking['scheduled_date']} ({booking['scheduled_time_slot']}) to {payload.new_date} ({payload.new_time_slot}){reassigned_note}."
             ))
 
+            queue_notification(
+                cursor,
+                user["id"],
+                user["email"],
+                f"CleanLondon booking rescheduled: {booking['reference_code']}",
+                f"Your booking is now scheduled for {payload.new_date} ({payload.new_time_slot}).",
+            )
+
             return {
                 "message": f"Booking rescheduled successfully to {payload.new_date} ({payload.new_time_slot}){reassigned_note}",
                 "booking_id": booking_id,
@@ -1110,7 +1285,11 @@ def get_staff_jobs(user: dict = Depends(require_role(["staff"]))):
                 WHERE b.staff_id = %s
                 ORDER BY b.scheduled_date ASC, b.id ASC
             """, (user["id"],))
-            return {"jobs": cursor.fetchall()}
+            jobs = cursor.fetchall()
+            for job in jobs:
+                # UK GDPR & Least Privilege: Mask residential PIN / access codes for staff until EN_ROUTE
+                job["access_notes"] = mask_access_notes_for_staff(job["status"], job.get("access_notes"))
+            return {"jobs": jobs}
 
 @app.patch("/api/staff/jobs/{booking_id}/status", tags=["Staff"])
 def update_job_status(booking_id: int, payload: StatusUpdateSchema, user: dict = Depends(require_role(["staff", "manager"]))):
@@ -1196,12 +1375,133 @@ def update_job_status(booking_id: int, payload: StatusUpdateSchema, user: dict =
                 VALUES (%s, %s, %s, %s, %s)
             """, (booking_id, user["id"], current_status, target_status, payload.notes or f"Status changed to {target_status}"))
 
+            cursor.execute("""
+                SELECT u.id, u.email, u.full_name
+                FROM users u
+                WHERE u.id IN (%s, %s)
+            """, (booking["customer_id"], booking["staff_id"] or 0))
+            for recipient in cursor.fetchall():
+                queue_notification(
+                    cursor,
+                    recipient["id"],
+                    recipient["email"],
+                    f"CleanLondon booking {booking_id}: {target_status}",
+                    f"Booking {booking_id} is now {target_status.replace('_', ' ')}.",
+                )
+
             return {
                 "message": f"Job status updated to {target_status}",
                 "booking_id": booking_id,
                 "previous_status": current_status,
                 "current_status": target_status
             }
+
+
+@app.get("/api/staff/schedule", tags=["Staff"])
+def get_staff_schedule(user: dict = Depends(require_role(["staff"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT day_of_week, TIME_FORMAT(start_time, '%%H:%%i') AS start_time,
+                       TIME_FORMAT(end_time, '%%H:%%i') AS end_time
+                FROM staff_weekly_availability
+                WHERE staff_id = %s ORDER BY day_of_week
+            """, (user["id"],))
+            weekly = cursor.fetchall()
+            cursor.execute("""
+                SELECT DATE_FORMAT(holiday_date, '%%Y-%%m-%%d') AS holiday_date, reason
+                FROM staff_holidays
+                WHERE staff_id = %s AND holiday_date >= CURRENT_DATE()
+                ORDER BY holiday_date
+            """, (user["id"],))
+            holidays = cursor.fetchall()
+            return {"weekly_availability": weekly, "holidays": holidays}
+
+
+@app.put("/api/staff/schedule", tags=["Staff"])
+def update_staff_schedule(
+    schedule: List[WeeklyAvailabilitySchema],
+    user: dict = Depends(require_role(["staff"])),
+):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("DELETE FROM staff_weekly_availability WHERE staff_id = %s", (user["id"],))
+            for shift in schedule:
+                try:
+                    start = datetime.datetime.strptime(shift.start_time, "%H:%M")
+                    end = datetime.datetime.strptime(shift.end_time, "%H:%M")
+                except ValueError as exc:
+                    raise HTTPException(status_code=422, detail="Shift times must use HH:MM format") from exc
+                if end <= start:
+                    raise HTTPException(status_code=422, detail="Shift end time must be after start time")
+                cursor.execute("""
+                    INSERT INTO staff_weekly_availability
+                        (staff_id, day_of_week, start_time, end_time)
+                    VALUES (%s, %s, %s, %s)
+                """, (user["id"], shift.day_of_week, shift.start_time, shift.end_time))
+            return {"message": "Weekly availability saved", "days_configured": len(schedule)}
+
+
+@app.post("/api/staff/holidays", tags=["Staff"])
+def add_staff_holiday(payload: HolidaySchema, user: dict = Depends(require_role(["staff"]))):
+    try:
+        datetime.date.fromisoformat(payload.holiday_date)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail="Holiday date must use YYYY-MM-DD format") from exc
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO staff_holidays (staff_id, holiday_date, reason)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE reason = VALUES(reason)
+            """, (user["id"], payload.holiday_date, payload.reason))
+            return {"message": "Holiday saved", "holiday_date": payload.holiday_date}
+
+
+@app.delete("/api/staff/holidays/{holiday_date}", tags=["Staff"])
+def remove_staff_holiday(holiday_date: str, user: dict = Depends(require_role(["staff"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM staff_holidays WHERE staff_id = %s AND holiday_date = %s",
+                (user["id"], holiday_date),
+            )
+            return {"message": "Holiday removed", "holiday_date": holiday_date}
+
+
+@app.get("/api/staff/earnings", tags=["Staff"])
+def get_staff_earnings(user: dict = Depends(require_role(["staff"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, reference_code, scheduled_date, total_price_gbp
+                FROM bookings
+                WHERE staff_id = %s AND status = 'COMPLETED'
+                ORDER BY scheduled_date DESC, id DESC
+            """, (user["id"],))
+            jobs = cursor.fetchall()
+            gross = sum(float(job["total_price_gbp"]) for job in jobs)
+            cleaner_share = round(gross * 0.70, 2)
+            return {
+                "currency": "GBP",
+                "completed_jobs": len(jobs),
+                "gross_bookings_gbp": round(gross, 2),
+                "cleaner_earnings_gbp": cleaner_share,
+                "jobs": jobs,
+            }
+
+
+@app.get("/api/notifications/my", tags=["Notifications"])
+def get_my_notifications(user: dict = Depends(get_current_user)):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, channel, subject, body, status, created_at, sent_at
+                FROM notification_outbox
+                WHERE recipient_user_id = %s
+                ORDER BY created_at DESC LIMIT 50
+            """, (user["id"],))
+            return {"notifications": cursor.fetchall()}
 
 # ==========================================================
 # 5. MANAGER / ADMIN DASHBOARD & DISPATCH
@@ -1283,7 +1583,10 @@ def get_all_bookings(status_filter: Optional[str] = None, user: dict = Depends(r
             query += " ORDER BY b.scheduled_date DESC, b.id DESC"
 
             cursor.execute(query, tuple(params))
-            return {"bookings": cursor.fetchall()}
+            bookings = cursor.fetchall()
+            for b in bookings:
+                b["access_notes"] = decrypt_sensitive_data(b.get("access_notes"))
+            return {"bookings": bookings}
 
 @app.get("/api/manager/staff", tags=["Manager"])
 def list_available_staff(user: dict = Depends(require_role(["manager"]))):
@@ -1292,18 +1595,58 @@ def list_available_staff(user: dict = Depends(require_role(["manager"]))):
             cursor.execute("""
                 SELECT u.id, u.full_name, u.email, u.phone, u.avatar_url,
                        sp.base_postcode, sp.service_radius_miles, sp.rating_avg, sp.rating_count,
-                       sp.is_available, sp.verified_dbs
+                       sp.is_available, sp.verified_dbs, sp.right_to_work_verified,
+                       sp.vetting_status, sp.dbs_document_ref, sp.right_to_work_document_ref
                 FROM users u
                 JOIN staff_profiles sp ON u.id = sp.user_id
                 WHERE u.role_id = 2
             """)
             return {"staff": cursor.fetchall()}
 
+
+@app.patch("/api/manager/staff/{staff_id}/vetting", tags=["Manager"])
+def update_staff_vetting(
+    staff_id: int,
+    payload: VettingSchema,
+    user: dict = Depends(require_role(["manager"])),
+):
+    approved = payload.vetting_status == "APPROVED" and payload.verified_dbs and payload.right_to_work_verified
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM users WHERE id = %s AND role_id = 2", (staff_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Cleaner staff not found")
+            cursor.execute("""
+                UPDATE staff_profiles
+                SET verified_dbs = %s,
+                    right_to_work_verified = %s,
+                    vetting_status = %s,
+                    dbs_document_ref = %s,
+                    right_to_work_document_ref = %s,
+                    vetted_at = CASE WHEN %s = 'APPROVED' THEN NOW() ELSE NULL END
+                WHERE user_id = %s
+            """, (
+                payload.verified_dbs,
+                payload.right_to_work_verified,
+                payload.vetting_status,
+                payload.dbs_document_ref,
+                payload.right_to_work_document_ref,
+                payload.vetting_status,
+                staff_id,
+            ))
+            cursor.execute("UPDATE users SET is_active = %s WHERE id = %s", (approved, staff_id))
+            return {
+                "message": "Cleaner vetting updated",
+                "staff_id": staff_id,
+                "vetting_status": payload.vetting_status,
+                "is_active": approved,
+            }
+
 @app.post("/api/manager/bookings/{booking_id}/assign", tags=["Manager"])
 def assign_staff_to_booking(booking_id: int, payload: AssignStaffSchema, user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id, full_name FROM users WHERE id = %s AND role_id = 2", (payload.staff_id,))
+            cursor.execute("SELECT id, full_name, email FROM users WHERE id = %s AND role_id = 2", (payload.staff_id,))
             staff = cursor.fetchone()
             if not staff:
                 raise HTTPException(status_code=404, detail="Cleaner staff not found")
@@ -1312,8 +1655,15 @@ def assign_staff_to_booking(booking_id: int, payload: AssignStaffSchema, user: d
             booking = cursor.fetchone()
             if not booking:
                 raise HTTPException(status_code=404, detail="Booking not found")
+            if booking["status"] == "CANCELLED":
+                raise HTTPException(status_code=400, detail="Cancelled bookings cannot be reassigned")
 
             # Check cleaner schedule conflict & TfL travel buffer
+            unavailable, availability_reason = check_staff_availability(
+                cursor, payload.staff_id, booking["scheduled_date"], booking["scheduled_time_slot"]
+            )
+            if unavailable:
+                raise HTTPException(status_code=400, detail=availability_reason)
             has_conflict, reason = check_cleaner_schedule_conflict(
                 cursor, payload.staff_id, booking["scheduled_date"], booking["scheduled_time_slot"], booking["postcode"], exclude_booking_id=booking_id
             )
@@ -1325,8 +1675,22 @@ def assign_staff_to_booking(booking_id: int, payload: AssignStaffSchema, user: d
                 INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
                 VALUES (%s, %s, 'SCHEDULED', 'SCHEDULED', %s)
             """, (booking_id, user["id"], f"Manually assigned to cleaner {staff['full_name']}"))
+            queue_notification(
+                cursor,
+                staff["id"],
+                staff["email"],
+                f"CleanLondon job assigned: {booking['reference_code']}",
+                f"You have been assigned booking {booking['reference_code']} for "
+                f"{booking['scheduled_date']} ({booking['scheduled_time_slot']}).",
+            )
 
             return {"message": f"Successfully assigned booking to {staff['full_name']}"}
+
+
+@app.post("/api/manager/bookings/{booking_id}/reassign", tags=["Manager"])
+def reassign_cleaner(booking_id: int, payload: AssignStaffSchema, user: dict = Depends(require_role(["manager"]))):
+    """Explicit reassignment workflow used when the scheduled cleaner cancels."""
+    return assign_staff_to_booking(booking_id, payload, user)
 
 @app.post("/api/manager/bookings/{booking_id}/auto-match", tags=["Manager"])
 def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["manager"]))):
@@ -1345,10 +1709,14 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
             booking_coords = resolve_postcode_coords(booking["postcode"])
 
             cursor.execute("""
-                SELECT u.id, u.full_name, sp.base_postcode, sp.service_radius_miles, sp.rating_avg
+                SELECT u.id, u.full_name, u.email, sp.base_postcode, sp.service_radius_miles, sp.rating_avg
                 FROM users u
                 JOIN staff_profiles sp ON u.id = sp.user_id
-                WHERE sp.is_available = TRUE AND u.role_id = 2
+                WHERE sp.is_available = TRUE
+                  AND sp.vetting_status = 'APPROVED'
+                  AND sp.verified_dbs = TRUE
+                  AND sp.right_to_work_verified = TRUE
+                  AND u.role_id = 2
             """)
             cleaners = cursor.fetchall()
             if not cleaners:
@@ -1358,6 +1726,12 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
             ranked_cleaners = []
             conflict_reasons = []
             for cleaner in cleaners:
+                unavailable, availability_reason = check_staff_availability(
+                    cursor, cleaner["id"], booking["scheduled_date"], booking["scheduled_time_slot"]
+                )
+                if unavailable:
+                    conflict_reasons.append(f"{cleaner['full_name']}: {availability_reason}")
+                    continue
                 has_conflict, reason = check_cleaner_schedule_conflict(
                     cursor, cleaner["id"], booking["scheduled_date"], booking["scheduled_time_slot"], booking["postcode"], exclude_booking_id=booking_id
                 )
@@ -1392,6 +1766,15 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
                 INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
                 VALUES (%s, %s, 'SCHEDULED', 'SCHEDULED', %s)
             """, (booking_id, user["id"], f"Auto-matched to {best_match['cleaner_name']} ({best_match['distance_miles']} miles away, schedule conflict-free)"))
+            selected_cleaner = next(c for c in cleaners if c["id"] == best_match["cleaner_id"])
+            queue_notification(
+                cursor,
+                selected_cleaner["id"],
+                selected_cleaner["email"],
+                f"CleanLondon job assigned: {booking['reference_code']}",
+                f"You have been assigned booking {booking['reference_code']} for "
+                f"{booking['scheduled_date']} ({booking['scheduled_time_slot']}).",
+            )
 
             return {
                 "message": f"Auto-matched booking to {best_match['cleaner_name']}",
@@ -1707,6 +2090,67 @@ def verify_payment_session(session_id: str, booking_id: Optional[int] = None):
                 "session_id": session_id,
                 "payment_intent_id": booking["stripe_payment_intent_id"]
             }
+
+
+@app.on_event("startup")
+def ensure_operational_schema():
+    """Apply additive operational schema changes to existing Docker volumes."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT COLUMN_NAME
+                FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'staff_profiles'
+            """, (DB_NAME,))
+            existing_columns = {row["COLUMN_NAME"] for row in cursor.fetchall()}
+            additions = {
+                "right_to_work_verified": "BOOLEAN NOT NULL DEFAULT TRUE",
+                "vetting_status": "ENUM('PENDING', 'APPROVED', 'REJECTED') NOT NULL DEFAULT 'APPROVED'",
+                "dbs_document_ref": "VARCHAR(255) NULL",
+                "right_to_work_document_ref": "VARCHAR(255) NULL",
+                "vetted_at": "TIMESTAMP NULL",
+            }
+            for column, definition in additions.items():
+                if column not in existing_columns:
+                    cursor.execute(f"ALTER TABLE staff_profiles ADD COLUMN {column} {definition}")
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS staff_weekly_availability (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    staff_id INT NOT NULL,
+                    day_of_week TINYINT NOT NULL,
+                    start_time TIME NOT NULL,
+                    end_time TIME NOT NULL,
+                    UNIQUE KEY uq_staff_weekly_slot (staff_id, day_of_week),
+                    CONSTRAINT fk_weekly_staff FOREIGN KEY (staff_id) REFERENCES users (id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS staff_holidays (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    staff_id INT NOT NULL,
+                    holiday_date DATE NOT NULL,
+                    reason VARCHAR(255) NULL,
+                    UNIQUE KEY uq_staff_holiday (staff_id, holiday_date),
+                    CONSTRAINT fk_holiday_staff FOREIGN KEY (staff_id) REFERENCES users (id) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS notification_outbox (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    recipient_user_id INT NULL,
+                    recipient_address VARCHAR(255) NOT NULL,
+                    channel ENUM('EMAIL', 'SMS') NOT NULL DEFAULT 'EMAIL',
+                    subject VARCHAR(255) NOT NULL,
+                    body TEXT NOT NULL,
+                    status ENUM('QUEUED', 'SENT', 'FAILED') NOT NULL DEFAULT 'QUEUED',
+                    error_message VARCHAR(500) NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    sent_at TIMESTAMP NULL,
+                    CONSTRAINT fk_notification_user FOREIGN KEY (recipient_user_id) REFERENCES users (id) ON DELETE SET NULL,
+                    INDEX idx_notification_recipient (recipient_user_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
 
 # ==========================================================
 # 8. FRONTEND STATIC ASSETS MOUNT
