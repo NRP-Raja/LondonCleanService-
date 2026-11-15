@@ -85,9 +85,9 @@
             <div class="success-icon-bubble">
                 <i class="fa-solid fa-check"></i>
             </div>
-            <h2>Payment Successful!</h2>
+            <h2 id="payment-heading">Payment Received</h2>
             <p style="color: var(--text-muted); margin-top: 6px;">
-                Thank you for choosing CleanLondon. Your domestic cleaning slot is officially confirmed.
+                Thank you for choosing CleanLondon. Stripe is confirming your payment; your booking is confirmed when the webhook is received.
             </p>
 
             <div class="receipt-box" id="receipt-details">
@@ -114,6 +114,8 @@
                 const res = await fetch(`/api/payments/session/${sessionId}/verify?booking_id=${bookingId || ''}`);
                 if (res.ok) {
                     const data = await res.json();
+                    const isPaid = data.payment_status === "PAID";
+                    document.getElementById("payment-heading").textContent = isPaid ? "Payment Successful!" : "Payment Processing";
                     document.getElementById("receipt-details").innerHTML = `
                         <div class="receipt-row">
                             <span>Booking Reference:</span>
@@ -133,7 +135,7 @@
                         </div>
                         <div class="receipt-row">
                             <span>Payment Status:</span>
-                            <span class="badge-paid"><i class="fa-solid fa-shield-check"></i> PAID (${data.payment_intent_id ? data.payment_intent_id.substring(0, 15) : 'Stripe'})</span>
+                            <span class="badge-paid"><i class="fa-solid fa-shield-check"></i> ${isPaid ? `PAID (${data.payment_intent_id ? data.payment_intent_id.substring(0, 15) : 'Stripe'})` : 'PENDING WEBHOOK'}</span>
                         </div>
                         <div class="receipt-row">
                             <span>Total Charged:</span>
@@ -144,10 +146,10 @@
                     document.getElementById("receipt-details").innerHTML = `
                         <div class="receipt-row">
                             <span>Status:</span>
-                            <span class="badge-paid"><i class="fa-solid fa-check"></i> Payment Processed</span>
+                            <span class="badge-paid"><i class="fa-solid fa-clock"></i> Awaiting Stripe confirmation</span>
                         </div>
                         <p style="margin-top: 10px; color: var(--text-muted); font-size: 0.85rem;">
-                            Your booking has been registered. You can review full details in your customer dashboard.
+                            Your booking is registered, but payment confirmation is still pending. Please do not retry payment.
                         </p>
                     `;
                 }

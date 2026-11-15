@@ -3,6 +3,13 @@ import re
 import math
 import random
 import datetime
+import json
+import queue
+import threading
+import urllib.error
+import urllib.parse
+import urllib.request
+from functools import lru_cache
 from typing import Optional, List, Dict, Any
 from contextlib import contextmanager
 
@@ -11,6 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.security import OAuth2PasswordBearer
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, EmailStr, Field
 from jose import JWTError, jwt
 from passlib.context import CryptContext
@@ -35,6 +43,8 @@ DB_PORT = int(os.getenv("DB_PORT", "3306"))
 DB_USER = os.getenv("DB_USER", "cleanlondon_user")
 DB_PASSWORD = os.getenv("DB_PASSWORD", "cleanlondon_pass")
 DB_NAME = os.getenv("DB_NAME", "cleanlondon_db")
+DB_POOL_SIZE = max(2, int(os.getenv("DB_POOL_SIZE", "10")))
+DB_POOL_TIMEOUT_SECONDS = float(os.getenv("DB_POOL_TIMEOUT_SECONDS", "5"))
 
 JWT_SECRET_KEY = os.getenv("JWT_SECRET_KEY", "supersecretjwtkey_cleanlondon_production_grade_token_2026")
 JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
@@ -90,29 +100,104 @@ LONDON_POSTCODE_COORDS = {
     "WC1":  (51.5240, -0.1230, "Bloomsbury / Holborn"),
     "SE10": (51.4820, -0.0070, "Greenwich / Maritime"),
     "N1":   (51.5370, -0.1030, "Islington / Angel"),
+    # Outer London outcodes used by customer addresses and staff territories.
+    # Full postcodes not represented here are resolved through postcodes.io.
+    "BR1":  (51.4050, 0.0150, "Bromley"),
+    "BR2":  (51.3940, 0.0190, "Bromley"),
+    "BR6":  (51.3670, 0.0940, "Orpington"),
+    "CR0":  (51.3710, -0.1010, "Croydon"),
+    "CR2":  (51.3510, -0.0900, "South Croydon"),
+    "CR7":  (51.3970, -0.1190, "Thornton Heath"),
+    "DA1":  (51.4450, 0.2190, "Dartford"),
+    "EN1":  (51.6530, -0.0800, "Enfield"),
+    "HA0":  (51.5550, -0.3050, "Wembley"),
+    "HA3":  (51.5980, -0.3330, "Harrow"),
+    "IG1":  (51.5590, 0.0690, "Ilford"),
+    "KT1":  (51.4120, -0.3000, "Kingston"),
+    "RM1":  (51.5790, 0.1820, "Romford"),
+    "SM1":  (51.3620, -0.1960, "Sutton"),
+    "UB1":  (51.5090, -0.3780, "Southall"),
+    "UB6":  (51.5350, -0.3500, "Greenford"),
+    "WD3":  (51.6400, -0.4720, "Rickmansworth"),
 }
 
 # ==========================================================
 # DATABASE HELPER
 # ==========================================================
+_DB_POOL = queue.LifoQueue(maxsize=DB_POOL_SIZE)
+_DB_POOL_LOCK = threading.Lock()
+_DB_POOL_CREATED = 0
+
+
+def _create_db_connection():
+    return pymysql.connect(
+        host=DB_HOST,
+        port=DB_PORT,
+        user=DB_USER,
+        password=DB_PASSWORD,
+        database=DB_NAME,
+        cursorclass=pymysql.cursors.DictCursor,
+        autocommit=True
+    )
+
+
 def get_db_connection():
+    global _DB_POOL_CREATED
     try:
-        conn = pymysql.connect(
-            host=DB_HOST,
-            port=DB_PORT,
-            user=DB_USER,
-            password=DB_PASSWORD,
-            database=DB_NAME,
-            cursorclass=pymysql.cursors.DictCursor,
-            autocommit=True
-        )
+        conn = _DB_POOL.get_nowait()
+        conn.ping(reconnect=True)
         return conn
-    except Exception as e:
-        # Provide helpful exception on initial connection failure
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Database connection error: {str(e)}. Ensure MySQL is running on {DB_HOST}:{DB_PORT}."
-        )
+    except queue.Empty:
+        with _DB_POOL_LOCK:
+            if _DB_POOL_CREATED < DB_POOL_SIZE:
+                _DB_POOL_CREATED += 1
+                try:
+                    return _create_db_connection()
+                except Exception:
+                    _DB_POOL_CREATED -= 1
+                    raise
+        try:
+            conn = _DB_POOL.get(timeout=DB_POOL_TIMEOUT_SECONDS)
+            conn.ping(reconnect=True)
+            return conn
+        except Exception as e:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Database connection pool is exhausted or unavailable: {str(e)}"
+            )
+    except Exception:
+        # Drop a stale pooled connection and create a replacement.
+        with _DB_POOL_LOCK:
+            _DB_POOL_CREATED = max(0, _DB_POOL_CREATED - 1)
+        try:
+            conn.close()
+        except Exception:
+            pass
+        try:
+            with _DB_POOL_LOCK:
+                _DB_POOL_CREATED += 1
+            return _create_db_connection()
+        except Exception as e:
+            with _DB_POOL_LOCK:
+                _DB_POOL_CREATED = max(0, _DB_POOL_CREATED - 1)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"Database connection error: {str(e)}. Ensure MySQL is running on {DB_HOST}:{DB_PORT}."
+            )
+
+
+def release_db_connection(conn):
+    try:
+        conn.ping(reconnect=True)
+        _DB_POOL.put(conn, timeout=DB_POOL_TIMEOUT_SECONDS)
+    except Exception:
+        global _DB_POOL_CREATED
+        try:
+            conn.close()
+        finally:
+            with _DB_POOL_LOCK:
+                _DB_POOL_CREATED = max(0, _DB_POOL_CREATED - 1)
+
 
 @contextmanager
 def get_db():
@@ -120,7 +205,17 @@ def get_db():
     try:
         yield conn
     finally:
-        conn.close()
+        release_db_connection(conn)
+
+
+def _database_unavailable(detail: str):
+    # Keep connection failures explicit while allowing the pool to be reused.
+    if isinstance(detail, HTTPException):
+        raise detail
+    raise HTTPException(
+        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+        detail=f"Database connection error: {detail}. Ensure MySQL is running on {DB_HOST}:{DB_PORT}."
+    )
 
 # ==========================================================
 # SECURITY & AUTH UTILITIES
@@ -276,9 +371,52 @@ app.add_middleware(
 # ==========================================================
 def normalize_london_postcode(raw_postcode: str) -> str:
     cleaned = re.sub(r'[^A-Za-z0-9]', '', raw_postcode.upper())
-    # Extract outcode (e.g. SW1A, E14, SE1, NW1)
+    # Extract outcode (e.g. SW1A, E14, SE1, NW1); never silently use Central London.
     match = re.match(r'^([A-Z]{1,2}[0-9][A-Z0-9]?)', cleaned)
-    return match.group(1) if match else "SW1A"
+    if not match:
+        raise HTTPException(status_code=422, detail="Enter a valid UK postcode")
+    return match.group(1)
+
+
+@lru_cache(maxsize=4096)
+def _lookup_postcode_online(postcode: str) -> Optional[tuple[float, float, str]]:
+    """Resolve an unlisted full postcode without maintaining a fragile local centroid list."""
+    url = f"https://api.postcodes.io/postcodes/{urllib.parse.quote(postcode)}"
+    try:
+        with urllib.request.urlopen(url, timeout=2.5) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        result = data.get("result") or {}
+        if result.get("latitude") is None or result.get("longitude") is None:
+            return None
+        return (
+            float(result["latitude"]),
+            float(result["longitude"]),
+            result.get("admin_district") or "Greater London",
+        )
+    except (OSError, ValueError, KeyError, urllib.error.URLError):
+        return None
+
+
+def resolve_postcode_coords(raw_postcode: str) -> tuple[float, float, str]:
+    """Resolve a postcode to a real centroid or reject it instead of using Central London."""
+    outcode = normalize_london_postcode(raw_postcode)
+    known = LONDON_POSTCODE_COORDS.get(outcode)
+    if known:
+        return known
+
+    compact = re.sub(r"[^A-Za-z0-9]", "", raw_postcode.upper())
+    if len(compact) < 5:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Postcode outcode '{outcode}' is not in the local map; provide a full UK postcode.",
+        )
+    resolved = _lookup_postcode_online(compact)
+    if not resolved:
+        raise HTTPException(
+            status_code=422,
+            detail=f"Could not resolve postcode '{raw_postcode}'. Check the postcode and try again.",
+        )
+    return resolved
 
 def haversine_distance_miles(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
     R = 3958.8  # Earth radius in miles
@@ -321,8 +459,8 @@ def calculate_tfl_travel_buffer_minutes(postcode1: str, postcode2: str) -> int:
     if out1 == out2:
         return 30
 
-    coords1 = LONDON_POSTCODE_COORDS.get(out1, (51.5074, -0.1278))
-    coords2 = LONDON_POSTCODE_COORDS.get(out2, (51.5074, -0.1278))
+    coords1 = resolve_postcode_coords(postcode1)
+    coords2 = resolve_postcode_coords(postcode2)
     dist_miles = haversine_distance_miles(coords1[0], coords1[1], coords2[0], coords2[1])
 
     # Base 30 min + 5 min per mile across London boroughs, capped at 60 mins
@@ -575,6 +713,7 @@ def calculate_quote(request: Request, payload: QuoteRequestSchema):
 def _compute_quote(payload: QuoteRequestSchema) -> dict:
     """Internal pricing helper — called by the endpoint and by create_booking."""
     outcode = normalize_london_postcode(payload.postcode)
+    resolve_postcode_coords(payload.postcode)
 
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -671,8 +810,7 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
                 raise HTTPException(status_code=404, detail="Selected service not found")
 
             # Coordinate resolution
-            outcode = normalize_london_postcode(payload.postcode)
-            coords = LONDON_POSTCODE_COORDS.get(outcode, (51.5074, -0.1278, "Central London"))
+            coords = resolve_postcode_coords(payload.postcode)
             lat, lon = coords[0], coords[1]
 
             # Price calculations
@@ -1204,8 +1342,7 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
             if not booking:
                 raise HTTPException(status_code=404, detail="Booking not found")
 
-            booking_outcode = normalize_london_postcode(booking["postcode"])
-            booking_coords = LONDON_POSTCODE_COORDS.get(booking_outcode, (51.5074, -0.1278))
+            booking_coords = resolve_postcode_coords(booking["postcode"])
 
             cursor.execute("""
                 SELECT u.id, u.full_name, sp.base_postcode, sp.service_radius_miles, sp.rating_avg
@@ -1228,8 +1365,7 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
                     conflict_reasons.append(f"{cleaner['full_name']}: {reason}")
                     continue
 
-                cleaner_outcode = normalize_london_postcode(cleaner["base_postcode"])
-                cleaner_coords = LONDON_POSTCODE_COORDS.get(cleaner_outcode, (51.5030, -0.0900))
+                cleaner_coords = resolve_postcode_coords(cleaner["base_postcode"])
                 dist = haversine_distance_miles(
                     booking_coords[0], booking_coords[1],
                     cleaner_coords[0], cleaner_coords[1]
@@ -1281,7 +1417,7 @@ def geocode_london_postcode(payload: GeocodeRequestSchema):
     London centroid data. In production, calls Google Maps Geocoding API.
     """
     outcode = normalize_london_postcode(payload.postcode)
-    coord_info = LONDON_POSTCODE_COORDS.get(outcode, (51.5074, -0.1278, "Greater London"))
+    coord_info = resolve_postcode_coords(payload.postcode)
 
     return {
         "input_postcode": payload.postcode,
@@ -1301,8 +1437,8 @@ def calculate_distance(payload: DistanceRequestSchema):
     orig_outcode = normalize_london_postcode(payload.origin_postcode)
     dest_outcode = normalize_london_postcode(payload.destination_postcode)
 
-    orig_coords = LONDON_POSTCODE_COORDS.get(orig_outcode, (51.5074, -0.1278))
-    dest_coords = LONDON_POSTCODE_COORDS.get(dest_outcode, (51.5030, -0.0900))
+    orig_coords = resolve_postcode_coords(payload.origin_postcode)
+    dest_coords = resolve_postcode_coords(payload.destination_postcode)
 
     dist_miles = haversine_distance_miles(orig_coords[0], orig_coords[1], dest_coords[0], dest_coords[1])
     est_transit_mins = int(dist_miles * 7 + 10)  # London TfL Underground estimate
@@ -1469,33 +1605,53 @@ async def stripe_webhook(request: Request):
         if not booking_id:
             return {"status": "ignored", "reason": "No booking_id associated with session"}
 
-        with get_db() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("SELECT id, customer_id, status, payment_status FROM bookings WHERE id = %s", (int(booking_id),))
-                booking = cursor.fetchone()
-
-                if booking:
-                    cursor.execute("""
-                        UPDATE bookings
-                        SET payment_status = 'PAID',
-                            stripe_session_id = COALESCE(stripe_session_id, %s),
-                            stripe_payment_intent_id = %s
-                        WHERE id = %s
-                    """, (session_id, payment_intent_id, int(booking_id)))
-
-                    cursor.execute("""
-                        INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
-                        VALUES (%s, %s, %s, %s, %s)
-                    """, (int(booking_id), booking["customer_id"], booking["status"], booking["status"], f"Payment fulfilled via Stripe ({payment_intent_id})"))
-
-                    return {
-                        "status": "success",
-                        "booking_id": int(booking_id),
-                        "payment_status": "PAID",
-                        "payment_intent": payment_intent_id
-                    }
+        return await run_in_threadpool(
+            _fulfill_stripe_payment,
+            int(booking_id),
+            session_id,
+            payment_intent_id,
+        )
 
     return {"status": "unhandled_event", "type": event_type}
+
+
+def _fulfill_stripe_payment(booking_id: int, session_id: Optional[str], payment_intent_id: str) -> dict:
+    """Run blocking MySQL fulfillment off the event loop used by the async webhook."""
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "SELECT id, customer_id, status, payment_status FROM bookings WHERE id = %s",
+                (booking_id,),
+            )
+            booking = cursor.fetchone()
+            if not booking:
+                return {"status": "ignored", "reason": "Booking not found"}
+
+            cursor.execute("""
+                UPDATE bookings
+                SET payment_status = 'PAID',
+                    stripe_session_id = COALESCE(stripe_session_id, %s),
+                    stripe_payment_intent_id = %s
+                WHERE id = %s
+            """, (session_id, payment_intent_id, booking_id))
+
+            cursor.execute("""
+                INSERT INTO booking_status_logs (booking_id, changed_by_user_id, previous_status, new_status, notes)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (
+                booking_id,
+                booking["customer_id"],
+                booking["status"],
+                booking["status"],
+                f"Payment fulfilled via Stripe ({payment_intent_id})",
+            ))
+
+            return {
+                "status": "success",
+                "booking_id": booking_id,
+                "payment_status": "PAID",
+                "payment_intent": payment_intent_id,
+            }
 
 @app.get("/api/payments/session/{session_id}/verify", tags=["Payments"])
 def verify_payment_session(session_id: str, booking_id: Optional[int] = None):
@@ -1524,8 +1680,9 @@ def verify_payment_session(session_id: str, booking_id: Optional[int] = None):
             if not booking:
                 raise HTTPException(status_code=404, detail="Payment session or booking not found")
 
-            # In mock or test mode, automatically ensure status is updated to PAID on success landing
-            if booking["payment_status"] != "PAID":
+            # Only mock mode may simulate fulfillment from the browser redirect.
+            # Real payments become authoritative when Stripe calls /webhook.
+            if MOCK_MODE and booking["payment_status"] != "PAID":
                 mock_pi = f"pi_mock_{random.randint(100000, 999999)}"
                 cursor.execute("""
                     UPDATE bookings 

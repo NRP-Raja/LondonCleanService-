@@ -60,6 +60,19 @@ services:
     networks:
       - cleanlondon_net
 
+  # Optional local Stripe forwarding: docker compose --profile stripe up
+  stripe-cli:
+    image: stripe/stripe-cli:latest
+    profiles: ["stripe"]
+    command: listen --forward-to http://backend:8000/api/payments/webhook
+    environment:
+      STRIPE_API_KEY: ${STRIPE_CLI_API_KEY}
+    depends_on:
+      backend:
+        condition: service_started
+    networks:
+      - cleanlondon_net
+
 volumes:
   mysql_data:
     driver: local

@@ -231,6 +231,20 @@ docker-compose up --build
 2. MySQL 8.0 will initialize automatically from `init.sql` with full demo seed data.
 3. The demo bar at the top lets you toggle between **Customer**, **Staff**, and **Manager** roles in one click.
 
+### Local Stripe webhook forwarding
+
+Stripe cannot call `localhost` directly. For real Stripe test payments, set
+`STRIPE_CLI_API_KEY` in `.env`, start the application, and run:
+
+```bash
+docker compose --profile stripe up stripe-cli
+```
+
+The CLI prints a `whsec_...` signing secret. Copy it to `STRIPE_WEBHOOK_SECRET`
+in `.env`, restart the backend, and complete a test Checkout. Payment status is
+updated only by the signed `checkout.session.completed` webhook; the success
+redirect is informational and is not treated as proof of payment.
+
 ### Option 2: Run Locally (Without Docker)
 ```bash
 # 1. Install Python requirements
