@@ -41,9 +41,9 @@
             </a>
 
             <nav class="nav-links">
-                <a href="#services-section" class="nav-item">Services</a>
-                <a href="#quote-section" class="nav-item">Instant Quote</a>
-                <a href="#reviews-section" class="nav-item">Reviews</a>
+                <a href="/?view=home" class="nav-item" onclick="navigateToSection(event, 'services-section')">Services</a>
+                <a href="/?view=home" class="nav-item" onclick="navigateToSection(event, 'quote-section')">Instant Quote</a>
+                <a href="/?view=home" class="nav-item" onclick="navigateToSection(event, 'reviews-section')">Reviews</a>
                 <a href="#" class="nav-item hidden" id="nav-dashboard-link" onclick="navigateToDashboard(event)">Dashboard</a>
             </nav>
 
@@ -301,6 +301,31 @@
                                 <!-- Populated dynamically by app.js -->
                             </div>
                         </div>
+
+                        <div class="staff-grid" style="margin-top:20px;">
+                            <div class="bookings-table-card">
+                                <div class="card-header space-between">
+                                    <h3><i class="fa-solid fa-clock"></i> Working Hours</h3>
+                                    <button class="btn btn-sm btn-primary" onclick="saveStaffSchedule()">Save Hours</button>
+                                </div>
+                                <p class="field-hint">Use one shift per weekday. Leave a day blank when unavailable.</p>
+                                <div id="staff-schedule-form"></div>
+                            </div>
+                            <div class="bookings-table-card">
+                                <div class="card-header space-between">
+                                    <h3><i class="fa-solid fa-sterling-sign"></i> Earnings</h3>
+                                    <button class="btn btn-sm btn-outline" onclick="loadStaffEarnings()">Refresh</button>
+                                </div>
+                                <h2 id="staff-earnings-total">£0.00</h2>
+                                <p id="staff-earnings-meta" class="field-hint">Completed jobs: 0</p>
+                                <div class="form-row-2">
+                                    <input type="date" id="staff-holiday-date">
+                                    <input type="text" id="staff-holiday-reason" placeholder="Sick day / annual leave">
+                                </div>
+                                <button class="btn btn-outline btn-block" onclick="addStaffHoliday()">Mark Holiday / Sick Day</button>
+                                <div id="staff-holidays-list" class="field-hint"></div>
+                            </div>
+                        </div>
                     </div>
 
                     <!-- Live Map & Transit Route Simulation Column -->
@@ -419,6 +444,18 @@
                             <tbody id="manager-bookings-list">
                                 <!-- Populated dynamically by app.js -->
                             </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <div class="bookings-table-card" style="margin-top:20px;">
+                    <div class="card-header">
+                        <h3><i class="fa-solid fa-id-card-clip"></i> Cleaner Vetting & Activation</h3>
+                    </div>
+                    <div class="table-responsive">
+                        <table class="data-table">
+                            <thead><tr><th>Cleaner</th><th>DBS</th><th>Right to Work</th><th>Status</th><th>Action</th></tr></thead>
+                            <tbody id="manager-staff-vetting-list"></tbody>
                         </table>
                     </div>
                 </div>
