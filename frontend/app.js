@@ -24,15 +24,80 @@ let state = {
     },
     activeJobForMap: null,
     managerBookings: [],
-    managerQuickFilter: null
+    managerQuickFilter: null,
+    staffJobs: []
 };
 
-function showToast(message, type = "info") {
+const TOAST_TYPES = new Set(["success", "error", "info"]);
+const MAX_TOAST_LENGTH = 200;
+const MAX_VISIBLE_TOASTS = 3;
+
+function escapeHtml(value) {
+    return String(value ?? "").replace(/[&<>"']/g, character => ({
+        "&": "&amp;",
+        "<": "&lt;",
+        ">": "&gt;",
+        '"': "&quot;",
+        "'": "&#39;"
+    })[character]);
+}
+
+function inlineJsArgument(value) {
+    return escapeHtml(JSON.stringify(String(value ?? "")));
+}
+
+function getApiErrorMessage(response, data, fallback) {
+    if (response?.status >= 500) {
+        console.error("CleanLondon server error:", response.status, data?.detail ?? data);
+        return "Something went wrong. Please try again.";
+    }
+
+    const detail = data?.detail;
+    if (Array.isArray(detail)) {
+        const validationError = detail.find(item => typeof item?.msg === "string" && item.msg.trim());
+        if (validationError) {
+            const field = Array.isArray(validationError.loc)
+                ? validationError.loc.filter(part => !["body", "query", "path"].includes(part)).join(" ")
+                : "";
+            return field ? field + ": " + validationError.msg : validationError.msg;
+        }
+    }
+    return typeof detail === "string" && detail.trim() ? detail : fallback;
+}
+
+function showApiError(response, data, fallback) {
+    showToast(getApiErrorMessage(response, data, fallback), "error");
+}
+
+function showToast(message, type) {
     const region = document.getElementById("toast-region");
     if (!region) return;
+    const safeType = TOAST_TYPES.has(type) ? type : "info";
+    const safeMessage = typeof message === "string"
+        ? message
+        : Array.isArray(message)
+            ? (message.find(item => typeof item?.msg === "string")?.msg || "Something went wrong. Please try again.")
+            : typeof message === "number"
+                ? String(message)
+                : "Something went wrong. Please try again.";
+    const iconClasses = {
+        success: "fa-circle-check",
+        error: "fa-circle-exclamation",
+        info: "fa-circle-info"
+    };
+
+    while (region.querySelectorAll(".toast").length >= MAX_VISIBLE_TOASTS) {
+        region.querySelector(".toast")?.remove();
+    }
+
     const toast = document.createElement("div");
-    toast.className = `toast toast-${type}`;
-    toast.innerHTML = `<i class="fa-solid ${type === "success" ? "fa-circle-check" : type === "error" ? "fa-circle-exclamation" : "fa-circle-info"}"></i><span>${message}</span>`;
+    toast.className = "toast toast-" + safeType;
+    const icon = document.createElement("i");
+    icon.className = "fa-solid " + iconClasses[safeType];
+    icon.setAttribute("aria-hidden", "true");
+    const text = document.createElement("span");
+    text.textContent = safeMessage.slice(0, MAX_TOAST_LENGTH);
+    toast.append(icon, text);
     region.appendChild(toast);
     requestAnimationFrame(() => toast.classList.add("visible"));
     setTimeout(() => {
@@ -41,7 +106,57 @@ function showToast(message, type = "info") {
     }, 4200);
 }
 
-window.alert = (message) => showToast(String(message), /error|failed|could not/i.test(String(message)) ? "error" : "info");
+let accessModalPreviousFocus = null;
+
+function openAccessInstructionsModal(accessNotes) {
+    const modal = document.getElementById("access-instructions-modal");
+    const content = document.getElementById("access-instructions-content");
+    if (!modal || !content) return;
+    accessModalPreviousFocus = document.activeElement;
+    content.textContent = accessNotes || "Handover in person";
+    modal.classList.add("active");
+    modal.querySelector(".modal-close")?.focus();
+}
+
+function closeAccessInstructionsModal(event) {
+    if (event && event.target !== event.currentTarget) return;
+    document.getElementById("access-instructions-modal")?.classList.remove("active");
+    const content = document.getElementById("access-instructions-content");
+    if (content) content.textContent = "";
+    accessModalPreviousFocus?.focus();
+    accessModalPreviousFocus = null;
+}
+
+function showBookingInstructions(bookingId) {
+    const booking = state.customerBookings?.find(item => Number(item.id) === Number(bookingId));
+    if (booking) openAccessInstructionsModal(booking.access_notes);
+}
+
+function showStaffAccessInstructions(jobId) {
+    const job = state.staffJobs?.find(item => Number(item.id) === Number(jobId));
+    if (!job) return;
+    if (!["EN_ROUTE", "IN_PROGRESS"].includes(job.status)) {
+        showToast("Key instructions unlock when your job is En Route.", "info");
+        return;
+    }
+    openAccessInstructionsModal(job.access_notes);
+}
+
+function downloadReceipt(bookingId) {
+    const booking = state.customerBookings?.find(item => Number(item.id) === Number(bookingId));
+    if (!booking) return;
+    const receipt = `CleanLondon receipt\n${booking.reference_code}\n${booking.service_name}\n£${Number(booking.total_price_gbp).toFixed(2)}\n${booking.scheduled_date} ${booking.scheduled_time_slot}`;
+    const link = document.createElement("a");
+    link.href = URL.createObjectURL(new Blob([receipt], { type: "text/plain" }));
+    link.download = `${booking.reference_code}-receipt.txt`;
+    link.click();
+    URL.revokeObjectURL(link.href);
+    showToast("Receipt downloaded.", "success");
+}
+
+document.addEventListener("keydown", event => {
+    if (event.key === "Escape") closeAccessInstructionsModal();
+});
 
 function setButtonBusy(button, busy, label = "Working...") {
     if (!button) return;
@@ -241,7 +356,11 @@ function applyAuthenticatedView() {
     document.getElementById("nav-dashboard-link").classList.remove("hidden");
 
     const firstName = user.full_name ? user.full_name.split(" ")[0] : "User";
-    document.getElementById("navbar-user-greeting").innerHTML = `<i class="fa-solid fa-circle-user"></i> Hi, ${firstName}!`;
+    const greeting = document.getElementById("navbar-user-greeting");
+    const greetingIcon = document.createElement("i");
+    greetingIcon.className = "fa-solid fa-circle-user";
+    greetingIcon.setAttribute("aria-hidden", "true");
+    greeting.replaceChildren(greetingIcon, document.createTextNode(" Hi, " + firstName + "!"));
 
     // 3. Top Demo Bar Status Display
     const userDisplay = document.getElementById("current-user-display");
@@ -315,7 +434,7 @@ async function handleManualLogin(e) {
             await checkAuthState();
             reopenPendingQuote();
         } else {
-            errorAlert.textContent = data.detail || "Invalid email or password.";
+            errorAlert.textContent = getApiErrorMessage(response, data, "Invalid email or password.");
             errorAlert.classList.remove("hidden");
         }
     } catch (err) {
@@ -366,7 +485,7 @@ async function handleRegistration(e) {
             await checkAuthState();
             reopenPendingQuote();
         } else {
-            errorAlert.textContent = data.detail || "Registration failed. Please check inputs.";
+            errorAlert.textContent = getApiErrorMessage(response, data, "Registration failed. Please check your details.");
             errorAlert.classList.remove("hidden");
         }
     } catch (err) {
@@ -416,10 +535,10 @@ async function triggerGoogleSignIn() {
             closeRegisterModal();
             await checkAuthState();
         } else {
-            alert(`Google login error: ${data.detail}`);
+            showApiError(res, data, "Google sign-in could not be completed. Please try again.");
         }
     } catch (err) {
-        alert("Google OAuth prototype could not connect.");
+        showToast("Google sign-in could not connect. Please try again.", "error");
     }
 }
 
@@ -444,10 +563,11 @@ async function handleDemoRoleSwitch(roleName) {
             // Re-evaluate state
             await checkAuthState();
         } else {
-            alert(`Could not switch role to ${roleName}: ${data.detail}`);
+            showApiError(response, data, "Could not switch role. Please try again.");
         }
     } catch (err) {
         console.error("Demo role switch error:", err);
+        showToast("Could not switch role. Please try again.", "error");
     }
 }
 
@@ -674,7 +794,7 @@ async function lookupPostcodeArea() {
         });
         const data = await res.json();
         if (res.ok) {
-            statusEl.innerHTML = `<span style="color: #16a34a"><i class="fa-solid fa-check"></i> Covered: ${data.neighborhood} (${data.outcode})</span>`;
+            statusEl.innerHTML = `<span style="color: #16a34a"><i class="fa-solid fa-check"></i> Covered: ${escapeHtml(data.neighborhood)} (${escapeHtml(data.outcode)})</span>`;
             recalculateQuote();
         }
     } catch (err) {
@@ -765,11 +885,11 @@ async function submitNewBooking(e) {
             // Automatically launch Stripe Hosted Checkout for the customer
             await initiateStripeCheckout(data.booking_id);
         } else {
-            alert(`Booking Error: ${data.detail || "Could not complete booking"}`);
+            showApiError(res, data, "Could not complete your booking. Please try again.");
         }
     } catch (err) {
         if (err.message !== "Session expired") {
-            alert("Booking submission failed. Please try again.");
+            showToast("Booking could not be submitted. Please try again.", "error");
         }
     } finally {
         state.isSubmittingBooking = false;
@@ -802,13 +922,13 @@ async function initiateStripeCheckout(bookingId) {
             // Secure Redirect to Stripe Hosted Checkout
             window.location.href = payData.checkout_url;
         } else {
-            alert(`Payment initialization failed: ${payData.detail || "Unable to reach Stripe"}`);
+            showApiError(payRes, payData, "Payment could not be started. Please try again.");
             applyAuthenticatedView();
         }
     } catch (err) {
         if (err.message !== "Session expired") {
             console.error("Stripe Checkout error:", err);
-            alert("Payment gateway error. Please try again from your dashboard.");
+            showToast("Payment could not be started. Please try again from your dashboard.", "error");
             applyAuthenticatedView();
         }
     }
@@ -821,8 +941,11 @@ async function loadCustomerBookings() {
 
     try {
         const res = await authFetch(`${API_BASE}/api/bookings/my`);
-        if (!res.ok) return;
-        const data = await res.json();
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            showApiError(res, data, "Could not load your bookings. Please try again.");
+            return;
+        }
         if (data.bookings) {
             state.customerBookings = data.bookings;
             if (data.bookings.length === 0) {
@@ -835,7 +958,7 @@ async function loadCustomerBookings() {
                 const active = steps.indexOf(status);
                 if (active < 0) return "";
                 return `<div class="progress-stepper">${steps.map((step, index) =>
-                    `<span class="${index <= active ? "done" : ""}"><i class="fa-solid ${index <= active ? "fa-check" : "fa-circle"}"></i>${step.replace("_", " ")}</span>`
+                    `<span class="${index <= active ? "done" : ""}"><i class="fa-solid ${index <= active ? "fa-check" : "fa-circle"}"></i>${escapeHtml(step.replace("_", " "))}</span>`
                 ).join("")}</div>`;
             }
 
@@ -847,55 +970,37 @@ async function loadCustomerBookings() {
                     return;
                 }
                 panel.classList.remove("hidden");
-                panel.innerHTML = `<strong>${active.reference_code}</strong> is currently ${active.status.replace("_", " ")} ${renderProgressStepper(active.status)}`;
-            }
-
-            function showBookingInstructions(bookingId) {
-                const booking = state.customerBookings?.find(b => b.id === bookingId);
-                if (!booking) return;
-                showToast(`Access instructions: ${booking.access_notes || "Handover in person"}`, "info");
-            }
-
-            function downloadReceipt(bookingId) {
-                const booking = state.customerBookings?.find(b => b.id === bookingId);
-                if (!booking) return;
-                const receipt = `CleanLondon receipt\n${booking.reference_code}\n${booking.service_name}\n£${Number(booking.total_price_gbp).toFixed(2)}\n${booking.scheduled_date} ${booking.scheduled_time_slot}`;
-                const link = document.createElement("a");
-                link.href = URL.createObjectURL(new Blob([receipt], { type: "text/plain" }));
-                link.download = `${booking.reference_code}-receipt.txt`;
-                link.click();
-                URL.revokeObjectURL(link.href);
-                showToast("Receipt downloaded.", "success");
+                panel.innerHTML = `<strong>${escapeHtml(active.reference_code)}</strong> is currently ${escapeHtml(active.status.replace("_", " "))} ${renderProgressStepper(active.status)}`;
             }
 
             listBody.innerHTML = data.bookings.map(b => {
                 let actionBtn = "";
                 if (b.status === "CANCELLED") {
                     const penaltyText = b.cancellation_fee_gbp > 0 ? ` (50% fee: £${parseFloat(b.cancellation_fee_gbp).toFixed(2)})` : ' (Full refund)';
-                    actionBtn = `<span class="badge-cancelled" style="background:#fee2e2; color:#b91c1c; font-size:0.75rem; padding:4px 8px; border-radius:12px; font-weight:700;" title="${b.cancellation_reason || 'Cancelled'}"><i class="fa-solid fa-ban"></i> Cancelled${penaltyText}</span>`;
+                    actionBtn = `<span class="badge-cancelled" style="background:#fee2e2; color:#b91c1c; font-size:0.75rem; padding:4px 8px; border-radius:12px; font-weight:700;" title="${escapeHtml(b.cancellation_reason || 'Cancelled')}"><i class="fa-solid fa-ban"></i> Cancelled${penaltyText}</span>`;
                 } else if (b.status === "COMPLETED" && !b.review_rating) {
-                    actionBtn = `<button class="btn btn-sm btn-primary" onclick="openReviewModal(${b.id})"><i class="fa-solid fa-star"></i> Review</button>`;
+                    actionBtn = `<button class="btn btn-sm btn-primary" onclick="openReviewModal(${Number(b.id)})"><i class="fa-solid fa-star"></i> Review</button>`;
                 } else if (b.review_rating) {
                     actionBtn = `<span class="text-gold">★ ${b.review_rating}/5 Rated</span>`;
                 } else if (b.status === "SCHEDULED") {
                     let payPart = "";
                     if (b.payment_status === "PENDING") {
-                        payPart = `<button class="btn btn-sm btn-primary" onclick="initiateStripeCheckout(${b.id})" style="background:#635bff; border-color:#635bff; margin-bottom:4px; font-size:0.75rem; padding:3px 7px;"><i class="fa-brands fa-stripe"></i> Pay £${parseFloat(b.total_price_gbp).toFixed(2)}</button><br>`;
+                        payPart = `<button class="btn btn-sm btn-primary" onclick="initiateStripeCheckout(${Number(b.id)})" style="background:#635bff; border-color:#635bff; margin-bottom:4px; font-size:0.75rem; padding:3px 7px;"><i class="fa-brands fa-stripe"></i> Pay £${parseFloat(b.total_price_gbp).toFixed(2)}</button><br>`;
                     }
                     actionBtn = `
                         ${payPart}
                         <div style="display:flex; gap:4px; flex-wrap:wrap;">
-                            <button class="btn btn-sm btn-outline-primary" onclick="openRescheduleModal(${b.id}, '${b.reference_code}', '${b.scheduled_date}', '${b.scheduled_time_slot}')" title="Reschedule Appointment" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-calendar-days"></i> Reschedule</button>
-                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${b.id}, '${b.reference_code}', '${b.scheduled_date}', '${b.scheduled_time_slot}', ${b.total_price_gbp})" title="Cancel Booking" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-ban"></i> Cancel</button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="openRescheduleModal(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)})" title="Reschedule Appointment" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-calendar-days"></i> Reschedule</button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)}, ${Number(b.total_price_gbp)})" title="Cancel Booking" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-ban"></i> Cancel</button>
                         </div>
                     `;
                 } else {
                     actionBtn = `
                         <div class="customer-actions">
-                            <button class="btn btn-sm btn-outline" onclick="showBookingInstructions(${b.id})"><i class="fa-solid fa-key"></i> View Instructions</button>
-                            <button class="btn btn-sm btn-outline-primary" onclick="openRescheduleModal(${b.id}, '${b.reference_code}', '${b.scheduled_date}', '${b.scheduled_time_slot}')"><i class="fa-solid fa-calendar-days"></i> Reschedule</button>
-                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${b.id}, '${b.reference_code}', '${b.scheduled_date}', '${b.scheduled_time_slot}', ${b.total_price_gbp})"><i class="fa-solid fa-ban"></i> Cancel</button>
-                            <button class="btn btn-sm btn-outline" onclick="downloadReceipt(${b.id})"><i class="fa-solid fa-download"></i> Receipt</button>
+                            <button class="btn btn-sm btn-outline" onclick="showBookingInstructions(${Number(b.id)})"><i class="fa-solid fa-key"></i> View Instructions</button>
+                            <button class="btn btn-sm btn-outline-primary" onclick="openRescheduleModal(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)})"><i class="fa-solid fa-calendar-days"></i> Reschedule</button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)}, ${Number(b.total_price_gbp)})"><i class="fa-solid fa-ban"></i> Cancel</button>
+                            <button class="btn btn-sm btn-outline" onclick="downloadReceipt(${Number(b.id)})"><i class="fa-solid fa-download"></i> Receipt</button>
                         </div>`;
                 }
 
@@ -910,13 +1015,13 @@ async function loadCustomerBookings() {
 
                 return `
                     <tr>
-                        <td data-label="Reference"><strong>${b.reference_code}</strong></td>
-                        <td data-label="Service">${b.service_name}</td>
-                        <td data-label="Date & time">${b.scheduled_date}<br><small class="text-muted">${b.scheduled_time_slot}</small></td>
-                        <td data-label="Address">${b.address_line1}, ${b.postcode}</td>
-                        <td data-label="Cleaner">${b.staff_name ? `<div class="cleaner-profile"><img src="${b.staff_avatar_url || '/static/logo.jpg'}" alt="${b.staff_name}"><span><strong>${b.staff_name}</strong><small>★ ${Number(b.staff_rating || 4.92).toFixed(2)} <b>DBS Verified</b></small></span></div>` : '<em class="text-muted">Allocating...</em>'}</td>
+                        <td data-label="Reference"><strong>${escapeHtml(b.reference_code)}</strong></td>
+                        <td data-label="Service">${escapeHtml(b.service_name)}</td>
+                        <td data-label="Date & time">${escapeHtml(b.scheduled_date)}<br><small class="text-muted">${escapeHtml(b.scheduled_time_slot)}</small></td>
+                        <td data-label="Address">${escapeHtml(b.address_line1)}, ${escapeHtml(b.postcode)}</td>
+                        <td data-label="Cleaner">${b.staff_name ? `<div class="cleaner-profile"><img src="${escapeHtml(b.staff_avatar_url || '/static/logo.jpg')}" alt="${escapeHtml(b.staff_name)}"><span><strong>${escapeHtml(b.staff_name)}</strong><small>★ ${Number(b.staff_rating || 4.92).toFixed(2)} <b>DBS Verified</b></small></span></div>` : '<em class="text-muted">Allocating...</em>'}</td>
                         <td data-label="Price"><strong>£${parseFloat(b.total_price_gbp).toFixed(2)}</strong><br><small>${paymentBadge}</small></td>
-                        <td data-label="Status"><span class="status-badge ${b.status}">${b.status.replace('_', ' ')}</span>${renderProgressStepper(b.status)}</td>
+                        <td data-label="Status"><span class="status-badge ${escapeHtml(b.status)}">${escapeHtml(b.status.replace('_', ' '))}</span>${renderProgressStepper(b.status)}</td>
                         <td data-label="Actions">${actionBtn}</td>
                     </tr>
                 `;
@@ -960,14 +1065,14 @@ async function cancelCustomerBooking(bookingId, refCode, scheduledDate, schedule
         });
         const data = await res.json();
         if (res.ok) {
-            alert(`Booking ${refCode} Cancelled:\n${data.policy_note}`);
+            showToast(data.policy_note ? "Booking " + refCode + " cancelled: " + data.policy_note : "Booking " + refCode + " cancelled.", "success");
             loadCustomerBookings();
         } else {
-            alert(`Cancellation Error: ${data.detail || "Could not cancel booking"}`);
+            showApiError(res, data, "Could not cancel this booking. Please try again.");
         }
     } catch (err) {
         if (err.message !== "Session expired") {
-            alert("Failed to communicate with cancellation server.");
+            showToast("Could not contact the cancellation service. Please try again.", "error");
         }
     }
 }
@@ -1015,15 +1120,15 @@ async function submitReschedule(e) {
 
         const data = await res.json();
         if (res.ok) {
-            alert(data.message);
+            showToast(data.message || "Booking rescheduled.", "success");
             closeRescheduleModal();
             loadCustomerBookings();
         } else {
-            alert(`Rescheduling Failed: ${data.detail || "Could not reschedule"}`);
+            showApiError(res, data, "Could not reschedule this booking. Please try again.");
         }
     } catch (err) {
         if (err.message !== "Session expired") {
-            alert("Error submitting reschedule request.");
+            showToast("Could not submit the reschedule request. Please try again.", "error");
         }
     } finally {
         submitBtn.disabled = false;
@@ -1073,14 +1178,14 @@ async function submitReview(e) {
         const data = await res.json();
         if (res.ok) {
             closeReviewModal();
-            alert("🌟 Thank you! Your review has been saved.");
+            showToast("Thank you. Your review has been saved.", "success");
             loadCustomerBookings();
         } else {
-            alert(`Error: ${data.detail}`);
+            showApiError(res, data, "Could not save your review. Please try again.");
         }
     } catch (err) {
         if (err.message !== "Session expired") {
-            alert("Failed to save review.");
+            showToast("Could not save your review. Please try again.", "error");
         }
     }
 }
@@ -1098,7 +1203,9 @@ async function loadStaffJobs() {
         if (!res.ok) return;
         const data = await res.json();
         if (data.jobs) {
+            state.staffJobs = data.jobs;
             if (data.jobs.length === 0) {
+                state.activeJobForMap = null;
                 container.innerHTML = `<div class="p-4 text-center text-muted">No jobs assigned today. Stand by for dispatch.</div>`;
                 return;
             }
@@ -1116,26 +1223,25 @@ async function loadStaffJobs() {
                     nextActionBtn = `<span class="text-emerald"><i class="fa-solid fa-check"></i> Clean Completed</span>`;
                 }
 
-                // UK GDPR Access Note Display: highlight unlocked key vs masked notice
                 const isUnlocked = (j.status === "EN_ROUTE" || j.status === "IN_PROGRESS");
-                const accessNoteHtml = isUnlocked
-                    ? `<span style="color:#047857; font-weight:600;"><i class="fa-solid fa-key"></i> ${j.access_notes || 'Handover in person'}</span>`
-                    : `<span style="color:#b45309; font-size:0.75rem;"><i class="fa-solid fa-shield-halved"></i> ${j.access_notes || 'Protected'}</span>`;
+                const accessInstructionAction = isUnlocked
+                    ? `<button type="button" class="btn btn-sm btn-outline" onclick="event.stopPropagation(); showStaffAccessInstructions(${Number(j.id)})"><i class="fa-solid fa-key"></i> View Key Instructions</button>`
+                    : `<span style="color:#b45309; font-size:0.75rem;"><i class="fa-solid fa-shield-halved"></i> Protected until En Route</span>`;
 
                 const heading = index === 0 ? `<h4 class="job-section-heading">${j.scheduled_date === today ? "Today's Shift" : "Upcoming"}</h4>` :
                     (data.jobs[index - 1].scheduled_date !== j.scheduled_date && j.scheduled_date !== today ? `<h4 class="job-section-heading">Upcoming</h4>` : "");
                 return `${heading}
-                    <div class="job-card ${state.activeJobForMap?.id === j.id ? 'active-selected' : ''}" onclick="selectJobForMap(${JSON.stringify(j).replace(/"/g, '&quot;')})">
+                    <div class="job-card ${state.activeJobForMap?.id === j.id ? 'active-selected' : ''}" data-job-id="${Number(j.id)}" onclick="selectJobForMap(${Number(j.id)})">
                         <div class="job-card-header">
-                            <span class="job-card-title">${j.reference_code} • ${j.service_name}</span>
-                            <span class="status-badge ${j.status}">${j.status.replace('_', ' ')}</span>
+                            <span class="job-card-title">${escapeHtml(j.reference_code)} • ${escapeHtml(j.service_name)}</span>
+                            <span class="status-badge ${escapeHtml(j.status)}">${escapeHtml(j.status.replace('_', ' '))}</span>
                         </div>
                         <div class="job-card-address">
-                            <i class="fa-solid fa-location-dot text-emerald"></i> ${j.address_line1}, ${j.postcode} (${j.bedrooms} Bed, ${j.bathrooms} Bath)
+                            <i class="fa-solid fa-location-dot text-emerald"></i> ${escapeHtml(j.address_line1)}, ${escapeHtml(j.postcode)} (${escapeHtml(j.bedrooms)} Bed, ${escapeHtml(j.bathrooms)} Bath)
                         </div>
                         <div class="access-alert">
-                            <strong>Customer:</strong> ${j.customer_name} (${j.customer_phone})<br>
-                            <strong>Key Handover:</strong> ${j.key_handling_type} — ${accessNoteHtml}
+                            <strong>Customer:</strong> ${escapeHtml(j.customer_name)} (${escapeHtml(j.customer_phone)})<br>
+                            <strong>Key Handover:</strong> ${escapeHtml(j.key_handling_type)} — ${accessInstructionAction}
                         </div>
                         ${j.status === "IN_PROGRESS" ? `
                         <fieldset class="room-checklist" onclick="event.stopPropagation()">
@@ -1147,14 +1253,17 @@ async function loadStaffJobs() {
                         </fieldset>` : ""}
                         <div class="job-actions-row">
                             <div class="primary-job-action">${nextActionBtn}</div>
-                            <button class="btn btn-outline map-action" onclick="event.stopPropagation(); openGoogleMaps('${j.postcode}')"><i class="fa-solid fa-map-location-dot"></i> Open in Google Maps</button>
+                            <button class="btn btn-outline map-action" onclick="event.stopPropagation(); openGoogleMaps(${inlineJsArgument(j.postcode)})"><i class="fa-solid fa-map-location-dot"></i> Open in Google Maps</button>
                         </div>
                     </div>
                 `;
             }).join("");
 
-            if (data.jobs.length > 0 && !state.activeJobForMap) {
-                selectJobForMap(data.jobs[0]);
+            const activeJobId = state.activeJobForMap?.id;
+            if (activeJobId && data.jobs.some(job => job.id === activeJobId)) {
+                selectJobForMap(activeJobId);
+            } else {
+                selectJobForMap(data.jobs[0].id);
             }
         }
     } catch (err) {
@@ -1169,210 +1278,54 @@ async function advanceJobStatus(bookingId, targetStatus) {
         const res = await authFetch(`${API_BASE}/api/staff/jobs/${bookingId}/status`, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ status: targetStatus, notes: `Status updated by cleaner` })
+            body: JSON.stringify({ status: targetStatus, notes: "Status updated by cleaner" })
         });
-        const data = await res.json();
-        if (res.ok) {
-            alert(`Job status progressed to: ${targetStatus}`);
-            loadStaffJobs();
-        } else {
-            alert(`Could not update status: ${data.detail}`);
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) {
+            showApiError(res, data, "Could not update this job. Please try again.");
+            return;
         }
-
-        function completeJobWithChecklist(bookingId) {
-            const card = [...document.querySelectorAll(".job-card")].find((item) =>
-                item.querySelector(`button[onclick*="completeJobWithChecklist(${bookingId})"]`)
-            );
-            const checks = card ? [...card.querySelectorAll(".room-check")] : [];
-            if (checks.length && !checks.every((checkbox) => checkbox.checked)) {
-                showToast("Complete all four room checks before signing off this job.", "error");
-                return;
-            }
-            advanceJobStatus(bookingId, "COMPLETED");
-        }
-
-        const STAFF_WEEKDAYS_FALLBACK_2 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-
-        async function loadStaffScheduleLegacy() {
-            const form = document.getElementById("staff-schedule-form");
-            if (!form) return;
-            try {
-                const res = await authFetch(`${API_BASE}/api/staff/schedule`);
-                if (!res.ok) return;
-                const data = await res.json();
-                const shifts = Object.fromEntries((data.weekly_availability || []).map(s => [s.day_of_week, s]));
-                form.innerHTML = STAFF_WEEKDAYS.map((day, index) => {
-                    const shift = shifts[index];
-                    return `<div class="form-row-2" style="align-items:center; margin:4px 0;">
-                        <label><input type="checkbox" class="staff-day-enabled" data-day="${index}" ${shift ? "checked" : ""}> ${day}</label>
-                        <span><input type="time" class="staff-day-start" data-day="${index}" value="${shift?.start_time || "09:00"}">
-                        &ndash; <input type="time" class="staff-day-end" data-day="${index}" value="${shift?.end_time || "17:00"}"></span>
-                    </div>`;
-                }).join("");
-                document.getElementById("staff-holidays-list").innerHTML =
-                    (data.holidays || []).map(h => `${h.holiday_date}: ${h.reason || "Unavailable"} ` +
-                        `<button class="btn btn-sm btn-outline" onclick="removeStaffHoliday('${h.holiday_date}')">Remove</button>`).join("<br>");
-            } catch (err) {
-                if (err.message !== "Session expired") console.error("Schedule load error:", err);
-            }
-        }
-
-        async function saveStaffScheduleLegacy() {
-            const schedule = [...document.querySelectorAll(".staff-day-enabled:checked")].map(input => {
-                const day = input.dataset.day;
-                return {
-                    day_of_week: Number(day),
-                    start_time: document.querySelector(`.staff-day-start[data-day="${day}"]`).value,
-                    end_time: document.querySelector(`.staff-day-end[data-day="${day}"]`).value
-                };
-            });
-            const res = await authFetch(`${API_BASE}/api/staff/schedule`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(schedule)
-            });
-            const data = await res.json();
-            showToast(res.ok ? "Working hours saved." : (data.detail || "Could not save working hours."), res.ok ? "success" : "error");
-        }
-
-        async function loadStaffEarningsLegacy() {
-            try {
-                const res = await authFetch(`${API_BASE}/api/staff/earnings`);
-                if (!res.ok) return;
-                const data = await res.json();
-                document.getElementById("staff-earnings-total").textContent = `£${Number(data.cleaner_earnings_gbp).toFixed(2)}`;
-                document.getElementById("staff-today-earnings").textContent = `£${Number(data.today_earnings_gbp || 0).toFixed(2)}`;
-                document.getElementById("staff-completed-hours").textContent = `${Number(data.completed_hours || 0).toFixed(1)}h`;
-                document.getElementById("staff-earnings-meta").textContent = `Completed jobs: ${data.completed_jobs} (70% cleaner share)`;
-            } catch (err) {
-                if (err.message !== "Session expired") console.error("Earnings load error:", err);
-            }
-        }
-
-        async function addStaffHolidayLegacy() {
-            const holidayDate = document.getElementById("staff-holiday-date").value;
-            const reason = document.getElementById("staff-holiday-reason").value;
-            if (!holidayDate) return showToast("Choose a holiday or sick-day date.", "error");
-            const res = await authFetch(`${API_BASE}/api/staff/holidays`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ holiday_date: holidayDate, reason })
-            });
-            const data = await res.json();
-            if (!res.ok) return showToast(data.detail || "Could not save holiday.", "error");
-            showToast("Holiday saved.", "success");
-            await loadStaffSchedule();
-        }
-
-        async function removeStaffHolidayLegacy(holidayDate) {
-            const res = await authFetch(`${API_BASE}/api/staff/holidays/${holidayDate}`, { method: "DELETE" });
-            if (res.ok) await loadStaffSchedule();
-        }
-
-        const STAFF_WEEKDAYS_FALLBACK_3 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-
-        async function loadStaffScheduleLegacy2() {
-            const form = document.getElementById("staff-schedule-form");
-            if (!form) return;
-            try {
-                const res = await authFetch(`${API_BASE}/api/staff/schedule`);
-                if (!res.ok) return;
-                const data = await res.json();
-                const shifts = Object.fromEntries((data.weekly_availability || []).map(s => [s.day_of_week, s]));
-                form.innerHTML = STAFF_WEEKDAYS.map((day, index) => {
-                    const shift = shifts[index];
-                    return `<div class="form-row-2" style="align-items:center; margin:4px 0;">
-                        <label><input type="checkbox" class="staff-day-enabled" data-day="${index}" ${shift ? "checked" : ""}> ${day}</label>
-                        <span><input type="time" class="staff-day-start" data-day="${index}" value="${shift?.start_time || "09:00"}">
-                        &ndash; <input type="time" class="staff-day-end" data-day="${index}" value="${shift?.end_time || "17:00"}"></span>
-                    </div>`;
-                }).join("");
-                document.getElementById("staff-holidays-list").innerHTML =
-                    (data.holidays || []).map(h => `${h.holiday_date}: ${h.reason || "Unavailable"} ` +
-                        `<button class="btn btn-sm btn-outline" onclick="removeStaffHoliday('${h.holiday_date}')">Remove</button>`).join("<br>");
-            } catch (err) {
-                if (err.message !== "Session expired") console.error("Schedule load error:", err);
-            }
-        }
-
-        async function saveStaffScheduleLegacy2() {
-            const schedule = [...document.querySelectorAll(".staff-day-enabled:checked")].map(input => {
-                const day = input.dataset.day;
-                return {
-                    day_of_week: Number(day),
-                    start_time: document.querySelector(`.staff-day-start[data-day="${day}"]`).value,
-                    end_time: document.querySelector(`.staff-day-end[data-day="${day}"]`).value
-                };
-            });
-            const res = await authFetch(`${API_BASE}/api/staff/schedule`, {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(schedule)
-            });
-            const data = await res.json();
-            alert(res.ok ? "Working hours saved." : (data.detail || "Could not save working hours."));
-        }
-
-        async function loadStaffEarningsLegacy2() {
-            try {
-                const res = await authFetch(`${API_BASE}/api/staff/earnings`);
-                if (!res.ok) return;
-                const data = await res.json();
-                document.getElementById("staff-earnings-total").textContent = `£${Number(data.cleaner_earnings_gbp).toFixed(2)}`;
-                document.getElementById("staff-today-earnings").textContent = `£${Number(data.today_earnings_gbp || 0).toFixed(2)}`;
-                document.getElementById("staff-completed-hours").textContent = `${Number(data.completed_hours || 0).toFixed(1)}h`;
-                document.getElementById("staff-earnings-meta").textContent =
-                    `Completed jobs: ${data.completed_jobs} (70% cleaner share)`;
-            } catch (err) {
-                if (err.message !== "Session expired") console.error("Earnings load error:", err);
-            }
-        }
-
-        async function addStaffHolidayLegacy2() {
-            const holidayDate = document.getElementById("staff-holiday-date").value;
-            const reason = document.getElementById("staff-holiday-reason").value;
-            if (!holidayDate) return alert("Choose a holiday or sick-day date.");
-            const res = await authFetch(`${API_BASE}/api/staff/holidays`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ holiday_date: holidayDate, reason })
-            });
-            const data = await res.json();
-            if (!res.ok) return alert(data.detail || "Could not save holiday.");
-            await loadStaffSchedule();
-        }
-
-        async function removeStaffHolidayLegacy2(holidayDate) {
-            const res = await authFetch(`${API_BASE}/api/staff/holidays/${holidayDate}`, { method: "DELETE" });
-            if (res.ok) await loadStaffSchedule();
-        }
+        showToast(`Job status moved to ${targetStatus.replace("_", " ")}.`, "success");
+        await loadStaffJobs();
     } catch (err) {
         if (err.message !== "Session expired") {
-            alert("Failed to advance status.");
+            showToast("Could not update this job. Please try again.", "error");
         }
     }
 }
 
+function completeJobWithChecklist(bookingId) {
+    const card = [...document.querySelectorAll(".job-card")].find(item => Number(item.dataset.jobId) === Number(bookingId));
+    const checks = card ? [...card.querySelectorAll(".room-check")] : [];
+    if (checks.length && !checks.every(checkbox => checkbox.checked)) {
+        showToast("Complete all four room checks before signing off this job.", "error");
+        return;
+    }
+    advanceJobStatus(bookingId, "COMPLETED");
+}
 const STAFF_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
 async function loadStaffSchedule() {
     const form = document.getElementById("staff-schedule-form");
     if (!form) return;
     const res = await authFetch(`${API_BASE}/api/staff/schedule`);
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+        showApiError(res, data, "Could not load your schedule. Please try again.");
+        return;
+    }
     const shifts = Object.fromEntries((data.weekly_availability || []).map(s => [s.day_of_week, s]));
     form.innerHTML = STAFF_WEEKDAYS.map((day, index) => {
         const shift = shifts[index];
         return `<div class="form-row-2" style="align-items:center; margin:4px 0;">
             <label><input type="checkbox" class="staff-day-enabled" data-day="${index}" ${shift ? "checked" : ""}> ${day}</label>
-            <span><input type="time" class="staff-day-start" data-day="${index}" value="${shift?.start_time || "09:00"}">
-            &ndash; <input type="time" class="staff-day-end" data-day="${index}" value="${shift?.end_time || "17:00"}"></span>
+            <span><input type="time" class="staff-day-start" data-day="${index}" value="${escapeHtml(shift?.start_time || "09:00")}">
+            &ndash; <input type="time" class="staff-day-end" data-day="${index}" value="${escapeHtml(shift?.end_time || "17:00")}"></span>
         </div>`;
     }).join("");
     document.getElementById("staff-holidays-list").innerHTML =
-        (data.holidays || []).map(h => `${h.holiday_date}: ${h.reason || "Unavailable"} ` +
-            `<button class="btn btn-sm btn-outline" onclick="removeStaffHoliday('${h.holiday_date}')">Remove</button>`).join("<br>");
+        (data.holidays || []).map(h => `${escapeHtml(h.holiday_date)}: ${escapeHtml(h.reason || "Unavailable")} ` +
+            `<button class="btn btn-sm btn-outline" onclick="removeStaffHoliday(${inlineJsArgument(h.holiday_date)})">Remove</button>`).join("<br>");
 }
 
 async function saveStaffSchedule() {
@@ -1389,7 +1342,12 @@ async function saveStaffSchedule() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(schedule)
     });
-    showToast(res.ok ? "Working hours saved." : "Could not save working hours.", res.ok ? "success" : "error");
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+        showToast("Working hours saved.", "success");
+    } else {
+        showApiError(res, data, "Could not save working hours. Please try again.");
+    }
 }
 
 async function loadStaffEarnings() {
@@ -1410,36 +1368,43 @@ async function addStaffHoliday() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ holiday_date: holidayDate, reason: document.getElementById("staff-holiday-reason").value })
     });
+    const data = await res.json().catch(() => ({}));
     if (res.ok) {
         showToast("Holiday saved.", "success");
         await loadStaffSchedule();
     } else {
-        showToast("Could not save holiday.", "error");
+        showApiError(res, data, "Could not save the holiday. Please try again.");
     }
 }
 
 async function removeStaffHoliday(holidayDate) {
     const res = await authFetch(`${API_BASE}/api/staff/holidays/${holidayDate}`, { method: "DELETE" });
-    if (res.ok) await loadStaffSchedule();
+    if (res.ok) {
+        await loadStaffSchedule();
+    } else {
+        const data = await res.json().catch(() => ({}));
+        showApiError(res, data, "Could not remove the holiday. Please try again.");
+    }
 }
 
-function selectJobForMap(job) {
+function selectJobForMap(jobId) {
+    const job = state.staffJobs.find(item => Number(item.id) === Number(jobId));
+    if (!job) return;
     state.activeJobForMap = job;
-    document.getElementById("pin-postcode-text").textContent = `${job.postcode}`;
+    document.getElementById("pin-postcode-text").textContent = job.postcode;
     const isUnlocked = (job.status === "EN_ROUTE" || job.status === "IN_PROGRESS");
     const accessText = isUnlocked
-        ? `<span style="color:#047857; font-weight:600;"><i class="fa-solid fa-key"></i> Key: ${job.key_handling_type} — "${job.access_notes || 'Handover in person'}"</span>`
-        : `<span style="color:#b45309; font-size:0.8rem;"><i class="fa-solid fa-shield-halved"></i> Key: ${job.key_handling_type} — "${job.access_notes || 'Protected'}"</span>`;
+        ? `<button class="btn btn-sm btn-outline" type="button" onclick="showStaffAccessInstructions(${Number(job.id)})"><i class="fa-solid fa-key"></i> View Key Instructions</button>`
+        : `<span style="color:#b45309; font-size:0.8rem;"><i class="fa-solid fa-shield-halved"></i> Protected until En Route</span>`;
 
     document.getElementById("map-active-job-info").innerHTML = `
-        <h4>${job.reference_code}: ${job.customer_name}</h4>
-        <p><i class="fa-solid fa-location-dot"></i> ${job.address_line1}, London ${job.postcode}</p>
-        <p>${accessText}</p>
+        <h4>${escapeHtml(job.reference_code)}: ${escapeHtml(job.customer_name)}</h4>
+        <p><i class="fa-solid fa-location-dot"></i> ${escapeHtml(job.address_line1)}, London ${escapeHtml(job.postcode)}</p>
+        <p><strong>Key Handover:</strong> ${escapeHtml(job.key_handling_type)} — ${accessText}</p>
     `;
     document.getElementById("transit-summary").innerHTML = `
-        <i class="fa-solid fa-train-subway"></i> <strong>TfL Transit:</strong> Estimated ~15-20 mins travel from base to <strong>${job.postcode}</strong>.
+        <i class="fa-solid fa-train-subway"></i> <strong>TfL Transit:</strong> Estimated ~15-20 mins travel from base to <strong>${escapeHtml(job.postcode)}</strong>.
     `;
-    loadStaffJobs();
 }
 
 function openGoogleMaps(postcode) {
@@ -1464,11 +1429,11 @@ async function loadManagerStaffVetting() {
     const data = await res.json();
     table.innerHTML = (data.staff || []).map(staff => `
         <tr>
-            <td>${staff.full_name}<br><small>${staff.email}</small></td>
-            <td><input type="checkbox" id="dbs-${staff.id}" ${staff.verified_dbs ? "checked" : ""}></td>
-            <td><input type="checkbox" id="rtw-${staff.id}" ${staff.right_to_work_verified ? "checked" : ""}></td>
-            <td>${staff.vetting_status || "PENDING"}</td>
-            <td><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${staff.id})">Save & Activate</button></td>
+            <td>${escapeHtml(staff.full_name)}<br><small>${escapeHtml(staff.email)}</small></td>
+            <td><input type="checkbox" id="dbs-${Number(staff.id)}" ${staff.verified_dbs ? "checked" : ""}></td>
+            <td><input type="checkbox" id="rtw-${Number(staff.id)}" ${staff.right_to_work_verified ? "checked" : ""}></td>
+            <td>${escapeHtml(staff.vetting_status || "PENDING")}</td>
+            <td><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${Number(staff.id)})">Save & Activate</button></td>
         </tr>`).join("");
 }
 
@@ -1484,9 +1449,13 @@ async function updateStaffVetting(staffId) {
             vetting_status: dbs && rtw ? "APPROVED" : "PENDING"
         })
     });
-    const data = await res.json();
-    alert(res.ok ? "Vetting record saved." : (data.detail || "Could not save vetting."));
-    if (res.ok) loadManagerStaffVetting();
+    const data = await res.json().catch(() => ({}));
+    if (res.ok) {
+        showToast("Vetting record saved.", "success");
+        loadManagerStaffVetting();
+    } else {
+        showApiError(res, data, "Could not save the vetting record. Please try again.");
+    }
 }
 
 async function loadManagerKPIs() {
@@ -1527,7 +1496,7 @@ async function loadManagerBookings() {
             state.managerBookings = visibleBookings;
             renderManagerTimeline(visibleBookings);
             if (visibleBookings.length === 0) {
-                tableBody.innerHTML = `<tr><td colspan="9" class="text-center">No bookings found for filter: ${filter}</td></tr>`;
+                tableBody.innerHTML = `<tr><td colspan="9" class="text-center">No bookings found for filter: ${escapeHtml(filter)}</td></tr>`;
                 return;
             }
 
@@ -1539,17 +1508,17 @@ async function loadManagerBookings() {
                 let actionControls = "";
                 if (!b.staff_id) {
                     actionControls = `
-                        <button class="btn btn-sm btn-primary" onclick="autoMatchCleaner(${b.id})" title="Auto-match nearest cleaner">
+                        <button class="btn btn-sm btn-primary" onclick="autoMatchCleaner(${Number(b.id)})" title="Auto-match nearest cleaner">
                             <i class="fa-solid fa-bolt"></i> Auto-Match
                         </button>
-                        <button class="btn btn-sm btn-outline-primary" onclick="openManualAssignment(${b.id})"><i class="fa-solid fa-user-check"></i> Assign</button>
+                        <button class="btn btn-sm btn-outline-primary" onclick="openManualAssignment(${Number(b.id)})"><i class="fa-solid fa-user-check"></i> Assign</button>
                     `;
                 } else {
                     const staffOptions = (staffByBooking[b.id] || []).map(staff =>
-                        `<option value="${staff.id}">${staff.full_name} — ${staff.base_postcode} (${staff.distance_miles ?? "—"} mi) • ${staff.jobs_today} jobs today</option>`
+                        `<option value="${Number(staff.id)}">${escapeHtml(staff.full_name)} — ${escapeHtml(staff.base_postcode)} (${escapeHtml(staff.distance_miles ?? "—")} mi) • ${escapeHtml(staff.jobs_today)} jobs today</option>`
                     ).join("");
                     actionControls = `
-                    <select onchange="manuallyReassign(${b.id}, this.value)" class="assignment-select">
+                    <select onchange="manuallyReassign(${Number(b.id)}, this.value)" class="assignment-select">
                             <option value="">Reassign...</option>
                         ${staffOptions}
                         </select>
@@ -1557,15 +1526,15 @@ async function loadManagerBookings() {
                 }
 
                 return `
-                    <tr data-booking-id="${b.id}" data-search="${`${b.reference_code} ${b.postcode} ${b.customer_name || ""} ${b.staff_name || ""}`.toLowerCase()}">
-                        <td data-label="Reference"><strong>${b.reference_code}</strong></td>
-                        <td data-label="Customer">${b.customer_name}<br><small class="text-muted">${b.customer_phone}</small></td>
-                        <td data-label="Postcode"><span class="badge-trust" style="margin:0; padding:2px 6px;">${b.postcode}</span></td>
-                        <td data-label="Service">${b.service_name}</td>
-                        <td data-label="Date & slot">${b.scheduled_date}<br><small>${b.scheduled_time_slot}</small></td>
+                    <tr data-booking-id="${Number(b.id)}" data-search="${escapeHtml(`${b.reference_code} ${b.postcode} ${b.customer_name || ""} ${b.staff_name || ""}`.toLowerCase())}">
+                        <td data-label="Reference"><strong>${escapeHtml(b.reference_code)}</strong></td>
+                        <td data-label="Customer">${escapeHtml(b.customer_name)}<br><small class="text-muted">${escapeHtml(b.customer_phone)}</small></td>
+                        <td data-label="Postcode"><span class="badge-trust" style="margin:0; padding:2px 6px;">${escapeHtml(b.postcode)}</span></td>
+                        <td data-label="Service">${escapeHtml(b.service_name)}</td>
+                        <td data-label="Date & slot">${escapeHtml(b.scheduled_date)}<br><small>${escapeHtml(b.scheduled_time_slot)}</small></td>
                         <td data-label="Value"><strong>£${parseFloat(b.total_price_gbp).toFixed(2)}</strong></td>
-                        <td data-label="Status"><span class="status-badge ${b.status}">${b.status.replace('_', ' ')}</span></td>
-                        <td data-label="Cleaner">${b.staff_name ? b.staff_name : '<span style="color:#e11d48; font-weight:700;"><i class="fa-solid fa-circle-exclamation"></i> Unassigned</span>'}</td>
+                        <td data-label="Status"><span class="status-badge ${escapeHtml(b.status)}">${escapeHtml(b.status.replace('_', ' '))}</span></td>
+                        <td data-label="Cleaner">${b.staff_name ? escapeHtml(b.staff_name) : '<span style="color:#e11d48; font-weight:700;"><i class="fa-solid fa-circle-exclamation"></i> Unassigned</span>'}</td>
                         <td data-label="Actions">${actionControls}</td>
                     </tr>
                 `;
@@ -1614,15 +1583,15 @@ async function loadManagerBookings() {
                 const [start, end] = toMinutes(booking.scheduled_time_slot);
                 const left = Math.max(0, ((start - startOfDay) / (endOfDay - startOfDay)) * 100);
                 const width = Math.max(7, ((end - start) / (endOfDay - startOfDay)) * 100);
-                return `<span class="timeline-job ${booking.status}" style="left:${left}%;width:${width}%"
-                    title="${booking.reference_code} · ${booking.scheduled_time_slot}">
-                    <strong>${booking.reference_code}</strong><small>${booking.scheduled_time_slot}</small>
+                return `<span class="timeline-job ${escapeHtml(booking.status)}" style="left:${left}%;width:${width}%"
+                    title="${escapeHtml(booking.reference_code)} · ${escapeHtml(booking.scheduled_time_slot)}">
+                    <strong>${escapeHtml(booking.reference_code)}</strong><small>${escapeHtml(booking.scheduled_time_slot)}</small>
                 </span>`;
             };
             timeline.innerHTML = `<div class="timeline-heading"><h3><i class="fa-solid fa-timeline"></i> Cleaner Schedule Timeline</h3>
                 <span class="timeline-hours">08:00&nbsp;&nbsp;&nbsp;&nbsp;12:00&nbsp;&nbsp;&nbsp;&nbsp;16:00&nbsp;&nbsp;&nbsp;&nbsp;20:00</span></div>` +
                 (Object.entries(grouped).map(([name, jobs]) =>
-                    `<div class="timeline-row"><strong>${name}</strong><div class="timeline-track">
+                    `<div class="timeline-row"><strong>${escapeHtml(name)}</strong><div class="timeline-track">
                         <span class="timeline-buffer-label">45 min TfL buffer after each job</span>
                         ${jobs.map(renderJob).join("")}
                     </div></div>`
@@ -1648,14 +1617,14 @@ async function autoMatchCleaner(bookingId) {
         });
         const data = await res.json();
         if (res.ok) {
-            alert(`⚡ ${data.message} (${data.distance_miles} miles away, ★${data.rating})`);
+            showToast(data.message || "Cleaner assigned successfully.", "success");
             loadManagerData();
         } else {
-            alert(`Auto-match error: ${data.detail}`);
+            showApiError(res, data, "Could not auto-match a cleaner. Please try again.");
         }
     } catch (err) {
         if (err.message !== "Session expired") {
-            alert("Failed to auto-match cleaner.");
+            showToast("Could not auto-match a cleaner. Please try again.", "error");
         }
     }
 }
@@ -1692,14 +1661,14 @@ async function manuallyReassign(bookingId, staffId) {
         });
         const data = await res.json();
         if (res.ok) {
-            alert("Staff assigned successfully!");
+            showToast("Staff assigned successfully.", "success");
             loadManagerData();
         } else {
-            alert(`Assign error: ${data.detail}`);
+            showApiError(res, data, "Could not assign the cleaner. Please try again.");
         }
     } catch (err) {
         if (err.message !== "Session expired") {
-            alert("Manual assignment failed.");
+            showToast("Could not assign the cleaner. Please try again.", "error");
         }
     }
 }

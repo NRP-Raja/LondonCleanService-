@@ -35,7 +35,7 @@
     <!-- Navigation Header -->
     <header class="navbar">
         <div class="nav-container">
-            <a href="#" class="brand-logo" onclick="navigateToHome(event)">
+            <a href="/?view=home" class="brand-logo" onclick="navigateToHome(event)">
                 <img src="/static/logo.jpg" alt="CleanLondon Logo" class="brand-logo-img">
                 <span>Clean<strong>London</strong></span>
             </a>
@@ -275,6 +275,7 @@
                             </table>
                         </div>
                     </div>
+                    <div id="customer-booking-progress" class="booking-progress-panel hidden"></div>
                 </div>
             </section>
 
@@ -296,6 +297,10 @@
                         <div class="bookings-table-card">
                             <div class="card-header">
                                 <h3><i class="fa-solid fa-list-check"></i> My Assigned London Jobs</h3>
+                            </div>
+                            <div class="earnings-banner">
+                                <div><span>Today's Earnings</span><strong id="staff-today-earnings">£0.00</strong></div>
+                                <div><span>Completed Hours</span><strong id="staff-completed-hours">0.0h</strong></div>
                             </div>
                             <div id="staff-jobs-container" class="job-card-list">
                                 <!-- Populated dynamically by app.js -->
@@ -415,6 +420,13 @@
                     <div class="card-header space-between">
                         <h3><i class="fa-solid fa-truck-fast"></i> Dispatch Console & Job Allocation</h3>
                         <div class="filter-group">
+                            <div class="manager-filter-pills">
+                                <button class="filter-pill urgent active" data-filter="UNASSIGNED" onclick="setManagerFilter('UNASSIGNED')">Unassigned ⚠️</button>
+                                <button class="filter-pill" data-filter="TODAY" onclick="setManagerFilter('TODAY')">Active Today</button>
+                                <button class="filter-pill" data-filter="SCHEDULED" onclick="setManagerFilter('SCHEDULED')">Scheduled</button>
+                                <button class="filter-pill" data-filter="COMPLETED" onclick="setManagerFilter('COMPLETED')">Completed</button>
+                            </div>
+                            <input id="manager-booking-search" class="manager-search" type="search" placeholder="Search postcode or reference" oninput="filterManagerBookings()">
                             <label>Filter Status:</label>
                             <select id="manager-status-filter" onchange="loadManagerData()">
                                 <option value="ALL">All Statuses</option>
@@ -425,6 +437,7 @@
                             </select>
                         </div>
                     </div>
+                    <div id="manager-schedule-timeline" class="schedule-timeline"></div>
 
                     <div class="table-responsive">
                         <table class="data-table">
@@ -688,6 +701,18 @@
         </div>
     </div>
 
+    <div class="modal-overlay" id="access-instructions-modal" role="dialog" aria-modal="true" aria-labelledby="access-instructions-title" onclick="closeAccessInstructionsModal()">
+        <div class="modal-dialog" onclick="event.stopPropagation()">
+            <div class="modal-header">
+                <h3 id="access-instructions-title"><i class="fa-solid fa-key"></i> Key Handover Instructions</h3>
+                <button class="modal-close" type="button" aria-label="Close key instructions" onclick="closeAccessInstructionsModal()">&times;</button>
+            </div>
+            <div class="modal-body">
+                <p id="access-instructions-content"></p>
+            </div>
+        </div>
+    </div>
+
     <!-- Footer -->
     <footer class="footer">
         <div class="footer-container">
@@ -720,6 +745,7 @@
         </div>
     </footer>
 
+    <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
     <script src="/static/app.js"></script>
 </body>
 </html>
