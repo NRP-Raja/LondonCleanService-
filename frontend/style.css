@@ -884,6 +884,57 @@ body {
 .timeline-job.IN_PROGRESS { background: #d1fae5; color: #065f46; }
 .timeline-job.COMPLETED { background: #e2e8f0; color: #475569; }
 
+/* Manager Operations Control Centre */
+#manager-dashboard-view { background: #f7f9fb; }
+.manager-shell { display: grid; grid-template-columns: 180px minmax(0, 1fr); gap: 28px; max-width: 1320px; margin: 0 auto; padding: 28px 24px 64px; }
+.manager-sidebar { position: sticky; top: 24px; align-self: start; padding: 16px 8px; }
+.manager-sidebar-label, .eyebrow { margin: 0 0 8px; color: #64748b; font-size: .68rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+.manager-nav-link { display: flex; align-items: center; gap: 10px; margin: 4px 0; padding: 10px 12px; border-radius: 8px; color: #64748b; font-size: .82rem; font-weight: 700; text-decoration: none; }
+.manager-nav-link:hover, .manager-nav-link:focus-visible, .manager-nav-link.active { background: #e8f7f1; color: #087f5b; outline: none; }
+.manager-workspace { min-width: 0; }
+.manager-header, .manager-section-header, .manager-toolbar, .manager-header-actions, .manager-attention-panel > div:first-child { display: flex; align-items: center; }
+.manager-header { justify-content: space-between; gap: 20px; margin-bottom: 24px; }
+.manager-header h2, .manager-section-header h3 { margin: 0; color: #172b4d; }
+.manager-header h2 { font-size: clamp(1.5rem, 3vw, 2rem); }
+.manager-header p:not(.eyebrow), .manager-section-header p:not(.eyebrow) { margin: 5px 0 0; color: #64748b; font-size: .88rem; }
+.manager-header-actions { gap: 12px; }
+.manager-date { color: #64748b; font-size: .8rem; }
+.manager-kpi-grid { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 16px; }
+.manager-kpi-card, .manager-card, .manager-attention-panel { border: 1px solid #e4e9ef; border-radius: 10px; background: #fff; box-shadow: 0 2px 8px rgba(23, 43, 77, .035); }
+.manager-kpi-card { display: flex; gap: 12px; min-height: 100px; padding: 16px; }
+.manager-kpi-card small { display: block; margin-top: 5px; color: #8290a3; font-size: .7rem; line-height: 1.35; }
+.manager-kpi-value { display: block; margin-top: 4px; color: #172b4d; font-size: 1.35rem; }
+.manager-kpi-icon { display: grid; flex: 0 0 34px; place-items: center; width: 34px; height: 34px; border-radius: 8px; }
+.manager-kpi-icon.teal { background: #e6f7f2; color: #087f5b; }
+.manager-kpi-icon.amber { background: #fff6dd; color: #a16207; }
+.manager-kpi-icon.slate { background: #eef2f6; color: #475569; }
+.manager-kpi-icon.green { background: #eaf8ef; color: #15803d; }
+.manager-kpi-icon.blue { background: #edf3ff; color: #3457a8; }
+.manager-attention-panel { justify-content: space-between; gap: 16px; margin-bottom: 16px; padding: 15px 18px; border-left: 3px solid #eab308; }
+.manager-attention-icon { display: grid; place-items: center; width: 32px; height: 32px; margin-right: 12px; border-radius: 8px; background: #fff6dd; color: #a16207; }
+.manager-attention-panel h3 { margin: 0; color: #172b4d; font-size: .9rem; }
+.manager-attention-panel p { margin: 3px 0 0; color: #64748b; font-size: .78rem; }
+.manager-attention-links { display: flex; flex-wrap: wrap; gap: 8px; }
+.manager-attention-links a { color: #087f5b; font-size: .78rem; font-weight: 800; text-decoration: none; }
+.manager-card { margin-bottom: 16px; overflow: hidden; }
+.manager-section-header { justify-content: space-between; gap: 16px; padding: 20px 20px 14px; }
+.manager-result-count { color: #8290a3; font-size: .78rem; }
+.manager-toolbar { justify-content: space-between; gap: 14px; flex-wrap: wrap; padding: 0 20px 14px; }
+.manager-filter-controls { display: flex; gap: 8px; }
+.manager-search, .manager-filter-controls select, .assignment-select { min-height: 36px; border: 1px solid #d5dce5; border-radius: 7px; padding: 7px 10px; color: #334155; background: #fff; }
+.manager-search:focus-visible, .manager-filter-controls select:focus-visible, .assignment-select:focus-visible, .manager-check input:focus-visible { outline: 3px solid rgba(0, 168, 107, .25); outline-offset: 1px; }
+.manager-bookings-table { min-width: 980px; }
+.manager-bookings-table td, .manager-bookings-table th { padding: 13px 14px; }
+.manager-bookings-table tbody tr:hover { background: #fbfdfd; }
+.manager-unassigned { color: #be123c; font-weight: 700; }
+.manager-check { display: inline-flex; align-items: center; gap: 7px; color: #64748b; font-size: .78rem; }
+.manager-status { display: inline-block; border-radius: 999px; padding: 4px 8px; font-size: .7rem; font-weight: 800; }
+.manager-status.approved { background: #e8f7f1; color: #087f5b; }
+.manager-status.pending { background: #fff6dd; color: #a16207; }
+.manager-status.rejected { background: #fff0f1; color: #be123c; }
+.manager-empty { padding: 28px !important; color: #8290a3; text-align: center; }
+.manager-card .schedule-timeline { margin: 0 20px 16px; }
+
 .room-checklist {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -1347,6 +1398,34 @@ body {
         align-items: flex-start;
         flex-direction: column;
     }
+
+    .manager-shell {
+        display: block;
+        padding: 20px 14px 44px;
+    }
+    .manager-sidebar {
+        position: static;
+        display: flex;
+        gap: 4px;
+        overflow-x: auto;
+        padding: 0 0 14px;
+    }
+    .manager-sidebar-label { display: none; }
+    .manager-nav-link { flex: 0 0 auto; white-space: nowrap; }
+    .manager-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .manager-header, .manager-attention-panel { align-items: flex-start; flex-direction: column; }
+    .manager-header-actions { width: 100%; justify-content: space-between; }
+    .manager-filter-controls { width: 100%; }
+    .manager-search, .manager-filter-controls select { flex: 1; min-width: 0; }
+    .manager-card .schedule-timeline { margin-right: 14px; margin-left: 14px; }
+}
+
+@media (max-width: 560px) {
+    .manager-kpi-grid { grid-template-columns: 1fr; }
+    .manager-section-header { align-items: flex-start; flex-direction: column; padding: 16px 14px 12px; }
+    .manager-toolbar { padding: 0 14px 12px; }
+    .manager-filter-pills { width: 100%; }
+    .manager-filter-pills .filter-pill { flex: 1; }
 }
 
 /* ==========================================================

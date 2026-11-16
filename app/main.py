@@ -1622,6 +1622,7 @@ def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
             cursor.execute("""
                 SELECT 
                     COUNT(*) as total_bookings,
+                    SUM(CASE WHEN scheduled_date = CURRENT_DATE() THEN 1 ELSE 0 END) as bookings_today,
                     SUM(CASE WHEN status = 'SCHEDULED' THEN 1 ELSE 0 END) as scheduled_count,
                     SUM(CASE WHEN status = 'EN_ROUTE' THEN 1 ELSE 0 END) as en_route_count,
                     SUM(CASE WHEN status = 'IN_PROGRESS' THEN 1 ELSE 0 END) as in_progress_count,
@@ -1647,6 +1648,7 @@ def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
                 "kpis": {
                     "daily_revenue_gbp": round(daily_rev, 2),
                     "total_revenue_gbp": round(monthly_rev, 2),
+                    "bookings_today": counts["bookings_today"] or 0,
                     "staff_utilization_pct": utilization_rate,
                     "total_cleaners": total_cleaners,
                     "active_cleaners_today": active_cleaners,

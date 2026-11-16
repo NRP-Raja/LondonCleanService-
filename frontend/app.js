@@ -25,6 +25,8 @@ let state = {
     activeJobForMap: null,
     managerBookings: [],
     managerQuickFilter: null,
+    managerUnassigned: null,
+    managerPendingVetting: null,
     staffJobs: []
 };
 
@@ -1554,27 +1556,66 @@ function openGoogleMaps(postcode) {
 // ==========================================================
 // 9. MANAGER DASHBOARD & DISPATCH
 // ==========================================================
+function formatManagerCurrency(value) {
+    return new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(Number(value) || 0);
+}
+
+function updateManagerAttention(unassigned, pendingVetting, errorMessage = null) {
+    const summary = document.getElementById("manager-attention-summary");
+    const links = document.getElementById("manager-attention-links");
+    if (!summary || !links) return;
+    if (errorMessage) {
+        summary.textContent = errorMessage;
+        links.innerHTML = `<button class="btn btn-sm btn-outline" onclick="loadManagerData()">Retry</button>`;
+        return;
+    }
+    if (unassigned !== null) state.managerUnassigned = Number(unassigned) || 0;
+    if (pendingVetting !== null) state.managerPendingVetting = Number(pendingVetting) || 0;
+    unassigned = state.managerUnassigned;
+    pendingVetting = state.managerPendingVetting;
+    const items = [];
+    if (Number(unassigned) > 0) items.push(`<a href="#manager-dispatch">${unassigned} unassigned booking${unassigned === 1 ? "" : "s"}</a>`);
+    if (Number(pendingVetting) > 0) items.push(`<a href="#manager-vetting">${pendingVetting} cleaner vetting record${pendingVetting === 1 ? "" : "s"} pending</a>`);
+    summary.textContent = items.length ? "Review the operational items below." : "No urgent operational items right now.";
+    links.innerHTML = items.join("");
+}
+
 async function loadManagerData() {
     if (!state.token) return;
-    loadManagerKPIs();
-    loadManagerBookings();
-    loadManagerStaffVetting();
+    const dateNode = document.getElementById("manager-current-date");
+    if (dateNode) {
+        dateNode.textContent = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" }).format(new Date());
+    }
+    await Promise.all([loadManagerKPIs(), loadManagerBookings(), loadManagerStaffVetting()]);
 }
 
 async function loadManagerStaffVetting() {
     const table = document.getElementById("manager-staff-vetting-list");
     if (!table) return;
-    const res = await authFetch(`${API_BASE}/api/manager/staff`);
-    if (!res.ok) return;
-    const data = await res.json();
-    table.innerHTML = (data.staff || []).map(staff => `
-        <tr>
-            <td>${escapeHtml(staff.full_name)}<br><small>${escapeHtml(staff.email)}</small></td>
-            <td><input type="checkbox" id="dbs-${Number(staff.id)}" ${staff.verified_dbs ? "checked" : ""}></td>
-            <td><input type="checkbox" id="rtw-${Number(staff.id)}" ${staff.right_to_work_verified ? "checked" : ""}></td>
-            <td>${escapeHtml(staff.vetting_status || "PENDING")}</td>
-            <td><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${Number(staff.id)}, event.currentTarget)">Save & Activate</button></td>
-        </tr>`).join("");
+    table.innerHTML = `<tr><td colspan="5"><span class="loading-skeleton"></span></td></tr>`;
+    try {
+        const res = await authFetch(`${API_BASE}/api/manager/staff`);
+        if (!res.ok) {
+            renderLoaderError(table, "We couldn't load cleaner vetting records. Please try again.", () => loadManagerStaffVetting(), 5);
+            return;
+        }
+        const data = await res.json();
+        const staff = data.staff || [];
+        const pending = staff.filter(cleaner => cleaner.vetting_status !== "APPROVED").length;
+        updateManagerAttention(Number(document.getElementById("kpi-unassigned-count")?.textContent || 0), pending);
+        table.innerHTML = staff.length ? staff.map(cleaner => `
+            <tr>
+                <td data-label="Cleaner"><strong>${escapeHtml(cleaner.full_name)}</strong><br><small class="text-muted">${escapeHtml(cleaner.email)}</small></td>
+                <td data-label="DBS verification"><label class="manager-check"><input type="checkbox" id="dbs-${Number(cleaner.id)}" ${cleaner.verified_dbs ? "checked" : ""}> <span>${cleaner.verified_dbs ? "Verified" : "Pending"}</span></label></td>
+                <td data-label="Right to work"><label class="manager-check"><input type="checkbox" id="rtw-${Number(cleaner.id)}" ${cleaner.right_to_work_verified ? "checked" : ""}> <span>${cleaner.right_to_work_verified ? "Verified" : "Pending"}</span></label></td>
+                <td data-label="Vetting status"><span class="manager-status ${escapeHtml((cleaner.vetting_status || "PENDING").toLowerCase())}">${escapeHtml(cleaner.vetting_status || "PENDING")}</span></td>
+                <td data-label="Action"><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${Number(cleaner.id)}, event.currentTarget)">Save</button></td>
+            </tr>`).join("") : `<tr><td colspan="5" class="manager-empty">No cleaner vetting records found.</td></tr>`;
+    } catch (err) {
+        if (err.message !== "Session expired") {
+            renderLoaderError(table, "We couldn't load cleaner vetting records. Please try again.", () => loadManagerStaffVetting(), 5);
+        }
+    }
 }
 
 async function updateStaffVetting(staffId, button) {
@@ -1608,34 +1649,42 @@ async function updateStaffVetting(staffId, button) {
 }
 
 async function loadManagerKPIs() {
+    const values = ["kpi-bookings-today", "kpi-daily-rev", "kpi-monthly-rev", "kpi-active-cleaners", "kpi-unassigned-count"];
     try {
         const res = await authFetch(`${API_BASE}/api/manager/dashboard-stats`);
-        if (!res.ok) return;
+        if (!res.ok) {
+            values.forEach(id => document.getElementById(id)?.replaceChildren(document.createTextNode("Unavailable")));
+            updateManagerAttention(null, null, "Dashboard metrics are unavailable. Retry to load current data.");
+            return;
+        }
         const data = await res.json();
         if (data.kpis) {
-            document.getElementById("kpi-daily-rev").textContent = `£${data.kpis.daily_revenue_gbp.toFixed(2)}`;
-            document.getElementById("kpi-monthly-rev").textContent = `£${data.kpis.total_revenue_gbp.toFixed(2)}`;
-            document.getElementById("kpi-utilization").textContent = `${data.kpis.staff_utilization_pct}%`;
-            document.getElementById("kpi-active-cleaners").textContent = data.kpis.active_cleaners_today;
+            document.getElementById("kpi-bookings-today").textContent = data.kpis.bookings_today;
+            document.getElementById("kpi-daily-rev").textContent = formatManagerCurrency(data.kpis.daily_revenue_gbp);
+            document.getElementById("kpi-monthly-rev").textContent = formatManagerCurrency(data.kpis.total_revenue_gbp);
+            document.getElementById("kpi-active-cleaners").textContent = `${data.kpis.active_cleaners_today} / ${data.kpis.total_cleaners}`;
             document.getElementById("kpi-unassigned-count").textContent = data.kpis.unassigned_jobs;
+            document.getElementById("kpi-utilization-caption").textContent = "Assigned cleaners / total cleaners today";
+            updateManagerAttention(data.kpis.unassigned_jobs, null);
         }
     } catch (err) {
         if (err.message !== "Session expired") {
             console.error("Manager KPIs error:", err);
+            updateManagerAttention(null, null, "Dashboard metrics are unavailable. Retry to load current data.");
         }
     }
 }
 
 async function loadManagerBookings() {
-    const filter = document.getElementById("manager-status-filter").value;
+    const filter = document.getElementById("manager-status-filter")?.value || "ALL";
     const tableBody = document.getElementById("manager-bookings-list");
     if (!tableBody) return;
-    renderTableSkeleton(tableBody, 9);
+    renderTableSkeleton(tableBody, 10);
 
     try {
         const res = await authFetch(`${API_BASE}/api/manager/bookings?status_filter=${filter}`);
         if (!res.ok) {
-            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 9);
+            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 10);
             return;
         }
         const data = await res.json().catch(() => ({}));
@@ -1648,8 +1697,10 @@ async function loadManagerBookings() {
                     : data.bookings;
             state.managerBookings = visibleBookings;
             renderManagerTimeline(visibleBookings);
+            const countNode = document.getElementById("manager-booking-count");
+            if (countNode) countNode.textContent = `${visibleBookings.length} result${visibleBookings.length === 1 ? "" : "s"}`;
             if (visibleBookings.length === 0) {
-                tableBody.innerHTML = `<tr><td colspan="9" class="text-center">No bookings found for filter: ${escapeHtml(filter)}</td></tr>`;
+                tableBody.innerHTML = `<tr><td colspan="10" class="manager-empty">No bookings found for the selected filters.</td></tr>`;
                 return;
             }
 
@@ -1687,15 +1738,16 @@ async function loadManagerBookings() {
                     <td data-label="Postcode"><span class="badge-trust" style="margin:0; padding:2px 6px;">${escapeHtml(b.postcode)}</span></td>
                     <td data-label="Service">${escapeHtml(b.service_name)}</td>
                     <td data-label="Date & slot">${escapeHtml(b.scheduled_date)}<br><small>${escapeHtml(b.scheduled_time_slot)}</small></td>
-                    <td data-label="Value"><strong>£${parseFloat(b.total_price_gbp).toFixed(2)}</strong></td>
-                    <td data-label="Status"><span class="status-badge ${escapeHtml(b.status)}">${escapeHtml(b.status.replace('_', ' '))}</span></td>
-                    <td data-label="Cleaner">${b.staff_name ? escapeHtml(b.staff_name) : '<span style="color:#e11d48; font-weight:700;"><i class="fa-solid fa-circle-exclamation"></i> Unassigned</span>'}</td>
+                    <td data-label="Value"><strong>${formatManagerCurrency(b.total_price_gbp)}</strong></td>
+                    <td data-label="Payment">${escapeHtml(b.payment_status || "Not recorded")}</td>
+                    <td data-label="Status"><span class="status-badge ${escapeHtml(b.status)}">${escapeHtml(b.status.replaceAll("_", " "))}</span></td>
+                    <td data-label="Cleaner">${b.staff_name ? escapeHtml(b.staff_name) : '<span class="manager-unassigned"><i class="fa-solid fa-circle-exclamation"></i> Unassigned</span>'}</td>
                     <td data-label="Actions">${actionControls}</td>
                 </tr>
             `;
         }).join("");
         } else {
-            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 9);
+            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 10);
         }
 
         function setManagerFilter(filter) {
@@ -1749,7 +1801,6 @@ async function loadManagerBookings() {
                 <span class="timeline-hours">08:00&nbsp;&nbsp;&nbsp;&nbsp;12:00&nbsp;&nbsp;&nbsp;&nbsp;16:00&nbsp;&nbsp;&nbsp;&nbsp;20:00</span></div>` +
                 (Object.entries(grouped).map(([name, jobs]) =>
                     `<div class="timeline-row"><strong>${escapeHtml(name)}</strong><div class="timeline-track">
-                        <span class="timeline-buffer-label">45 min TfL buffer after each job</span>
                         ${jobs.map(renderJob).join("")}
                     </div></div>`
                 ).join("") || `<p class="text-muted">No assigned jobs in this view.</p>`);
@@ -1763,7 +1814,7 @@ async function loadManagerBookings() {
     } catch (err) {
         if (err.message !== "Session expired") {
             console.error("Manager bookings load error:", err);
-            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 9);
+            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 10);
         }
     }
 }
