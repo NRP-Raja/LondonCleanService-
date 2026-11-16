@@ -5,6 +5,7 @@
 
 const API_BASE = ""; // Relative to FastAPI host
 const TOKEN_KEY = "cleanlondon_token";
+const PENDING_QUOTE_KEY = "cleanlondon_pending_quote";
 
 let state = {
     token: null,
@@ -22,7 +23,8 @@ let state = {
         estimatedHours: 3.0
     },
     activeJobForMap: null,
-    managerBookings: []
+    managerBookings: [],
+    managerQuickFilter: null
 };
 
 function showToast(message, type = "info") {
@@ -63,7 +65,10 @@ document.addEventListener("DOMContentLoaded", async () => {
     const dateInput = document.getElementById("book-date");
     if (dateInput) {
         dateInput.value = tomorrow.toISOString().split("T")[0];
+        dateInput.min = new Date().toISOString().split("T")[0];
     }
+    const rescheduleDate = document.getElementById("reschedule-date");
+    if (rescheduleDate) rescheduleDate.min = new Date().toISOString().split("T")[0];
 
     // Initialize instant quote calculations for public view
     recalculateQuote();
@@ -308,6 +313,7 @@ async function handleManualLogin(e) {
             localStorage.setItem(TOKEN_KEY, data.access_token);
             closeLoginModal();
             await checkAuthState();
+            reopenPendingQuote();
         } else {
             errorAlert.textContent = data.detail || "Invalid email or password.";
             errorAlert.classList.remove("hidden");
@@ -358,6 +364,7 @@ async function handleRegistration(e) {
             localStorage.setItem(TOKEN_KEY, data.access_token);
             closeRegisterModal();
             await checkAuthState();
+            reopenPendingQuote();
         } else {
             errorAlert.textContent = data.detail || "Registration failed. Please check inputs.";
             errorAlert.classList.remove("hidden");
@@ -619,6 +626,36 @@ async function recalculateQuote() {
             const modalTotal = document.getElementById("modal-total-display");
             if (modalTotal) modalTotal.textContent = `£${data.total_price_gbp.toFixed(2)}`;
         }
+
+        function savePendingQuote() {
+            localStorage.setItem(PENDING_QUOTE_KEY, JSON.stringify({
+                postcode: state.quote.postcode,
+                service_id: state.quote.service_id,
+                property_type: state.quote.property_type,
+                bedrooms: state.quote.bedrooms,
+                bathrooms: state.quote.bathrooms,
+                has_pets: state.quote.has_pets,
+                deep_clean_requested: state.quote.deep_clean,
+                total_price_gbp: state.quote.calculatedPrice,
+                estimated_hours: state.quote.estimatedHours
+            }));
+        }
+
+        function reopenPendingQuote() {
+            if (!state.user || state.user.role !== "customer") return;
+            const rawQuote = localStorage.getItem(PENDING_QUOTE_KEY);
+            if (!rawQuote) return;
+            try {
+                const pendingQuote = JSON.parse(rawQuote);
+                state.quote = { ...state.quote, ...pendingQuote, deep_clean: pendingQuote.deep_clean_requested };
+                localStorage.removeItem(PENDING_QUOTE_KEY);
+                openBookingModal();
+                showToast("Your saved quote is ready. Complete the details to continue.", "success");
+            } catch (error) {
+                localStorage.removeItem(PENDING_QUOTE_KEY);
+                console.error("Could not restore pending quote:", error);
+            }
+        }
     } catch (err) {
         console.error("Quote calculate error:", err);
     }
@@ -649,10 +686,13 @@ async function lookupPostcodeArea() {
 // 6. CUSTOMER BOOKING FLOW
 // ==========================================================
 function openBookingModal() {
+    if (!state.token) savePendingQuote();
     const bookPostcode = document.getElementById("book-postcode");
     if (bookPostcode) {
         bookPostcode.value = state.quote.postcode;
     }
+    const modalTotal = document.getElementById("modal-total-display");
+    if (modalTotal) modalTotal.textContent = `£${Number(state.quote.calculatedPrice || 0).toFixed(2)}`;
     document.getElementById("booking-modal").classList.add("active");
     setRoute("home", "booking", true);
 }
@@ -1071,7 +1111,7 @@ async function loadStaffJobs() {
                 } else if (j.status === "EN_ROUTE") {
                     nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="advanceJobStatus(${j.id}, 'IN_PROGRESS')"><i class="fa-solid fa-play"></i> Arrived: Begin Clean</button>`;
                 } else if (j.status === "IN_PROGRESS") {
-                    nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="advanceJobStatus(${j.id}, 'COMPLETED')"><i class="fa-solid fa-circle-check"></i> Complete & Sign Off</button>`;
+                nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="completeJobWithChecklist(${j.id})"><i class="fa-solid fa-circle-check"></i> Complete & Sign Off</button>`;
                 } else {
                     nextActionBtn = `<span class="text-emerald"><i class="fa-solid fa-check"></i> Clean Completed</span>`;
                 }
@@ -1097,6 +1137,14 @@ async function loadStaffJobs() {
                             <strong>Customer:</strong> ${j.customer_name} (${j.customer_phone})<br>
                             <strong>Key Handover:</strong> ${j.key_handling_type} — ${accessNoteHtml}
                         </div>
+                        ${j.status === "IN_PROGRESS" ? `
+                        <fieldset class="room-checklist" onclick="event.stopPropagation()">
+                            <legend>Room completion checklist</legend>
+                            <label><input class="room-check" type="checkbox"> Kitchen sanitized</label>
+                            <label><input class="room-check" type="checkbox"> Bathrooms disinfected</label>
+                            <label><input class="room-check" type="checkbox"> Floors vacuumed & mopped</label>
+                            <label><input class="room-check" type="checkbox"> Keys returned / secured</label>
+                        </fieldset>` : ""}
                         <div class="job-actions-row">
                             <div class="primary-job-action">${nextActionBtn}</div>
                             <button class="btn btn-outline map-action" onclick="event.stopPropagation(); openGoogleMaps('${j.postcode}')"><i class="fa-solid fa-map-location-dot"></i> Open in Google Maps</button>
@@ -1129,6 +1177,18 @@ async function advanceJobStatus(bookingId, targetStatus) {
             loadStaffJobs();
         } else {
             alert(`Could not update status: ${data.detail}`);
+        }
+
+        function completeJobWithChecklist(bookingId) {
+            const card = [...document.querySelectorAll(".job-card")].find((item) =>
+                item.querySelector(`button[onclick*="completeJobWithChecklist(${bookingId})"]`)
+            );
+            const checks = card ? [...card.querySelectorAll(".room-check")] : [];
+            if (checks.length && !checks.every((checkbox) => checkbox.checked)) {
+                showToast("Complete all four room checks before signing off this job.", "error");
+                return;
+            }
+            advanceJobStatus(bookingId, "COMPLETED");
         }
 
         const STAFF_WEEKDAYS_FALLBACK_2 = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
@@ -1497,7 +1557,7 @@ async function loadManagerBookings() {
                 }
 
                 return `
-                    <tr data-booking-id="${b.id}" data-search="${`${b.reference_code} ${b.postcode}`.toLowerCase()}">
+                    <tr data-booking-id="${b.id}" data-search="${`${b.reference_code} ${b.postcode} ${b.customer_name || ""} ${b.staff_name || ""}`.toLowerCase()}">
                         <td data-label="Reference"><strong>${b.reference_code}</strong></td>
                         <td data-label="Customer">${b.customer_name}<br><small class="text-muted">${b.customer_phone}</small></td>
                         <td data-label="Postcode"><span class="badge-trust" style="margin:0; padding:2px 6px;">${b.postcode}</span></td>
@@ -1540,12 +1600,33 @@ async function loadManagerBookings() {
                 grouped[b.staff_name] ||= [];
                 grouped[b.staff_name].push(b);
             });
-            timeline.innerHTML = `<h3><i class="fa-solid fa-timeline"></i> Daily Cleaner Schedule</h3>` +
-                Object.entries(grouped).map(([name, jobs]) =>
-                    `<div class="timeline-row"><strong>${name}</strong><div>${jobs.map(b =>
-                        `<span class="timeline-job ${b.status}" title="${b.reference_code}">${b.scheduled_date} · ${b.scheduled_time_slot}<small>${b.reference_code}</small></span>`
-                    ).join("")}</div></div>`
-                ).join("") || `<p class="text-muted">No assigned jobs in this view.</p>`;
+            const toMinutes = (slot) => {
+                const times = String(slot || "").match(/\d{1,2}:\d{2}/g) || ["08:00", "11:00"];
+                const parse = (value) => {
+                    const [hours, minutes] = value.split(":").map(Number);
+                    return hours * 60 + minutes;
+                };
+                return [parse(times[0]), parse(times[1] || times[0])];
+            };
+            const startOfDay = 8 * 60;
+            const endOfDay = 20 * 60;
+            const renderJob = (booking) => {
+                const [start, end] = toMinutes(booking.scheduled_time_slot);
+                const left = Math.max(0, ((start - startOfDay) / (endOfDay - startOfDay)) * 100);
+                const width = Math.max(7, ((end - start) / (endOfDay - startOfDay)) * 100);
+                return `<span class="timeline-job ${booking.status}" style="left:${left}%;width:${width}%"
+                    title="${booking.reference_code} · ${booking.scheduled_time_slot}">
+                    <strong>${booking.reference_code}</strong><small>${booking.scheduled_time_slot}</small>
+                </span>`;
+            };
+            timeline.innerHTML = `<div class="timeline-heading"><h3><i class="fa-solid fa-timeline"></i> Cleaner Schedule Timeline</h3>
+                <span class="timeline-hours">08:00&nbsp;&nbsp;&nbsp;&nbsp;12:00&nbsp;&nbsp;&nbsp;&nbsp;16:00&nbsp;&nbsp;&nbsp;&nbsp;20:00</span></div>` +
+                (Object.entries(grouped).map(([name, jobs]) =>
+                    `<div class="timeline-row"><strong>${name}</strong><div class="timeline-track">
+                        <span class="timeline-buffer-label">45 min TfL buffer after each job</span>
+                        ${jobs.map(renderJob).join("")}
+                    </div></div>`
+                ).join("") || `<p class="text-muted">No assigned jobs in this view.</p>`);
         }
 
         function openManualAssignment(bookingId) {
@@ -1577,6 +1658,28 @@ async function autoMatchCleaner(bookingId) {
             alert("Failed to auto-match cleaner.");
         }
     }
+}
+
+function setManagerFilter(filter) {
+    document.querySelectorAll(".filter-pill").forEach(button =>
+        button.classList.toggle("active", button.dataset.filter === filter)
+    );
+    const select = document.getElementById("manager-status-filter");
+    if (filter === "UNASSIGNED" || filter === "TODAY") {
+        state.managerQuickFilter = filter;
+        if (select) select.value = "ALL";
+    } else {
+        state.managerQuickFilter = null;
+        if (select) select.value = filter;
+    }
+    loadManagerData();
+}
+
+function filterManagerBookings() {
+    const query = (document.getElementById("manager-booking-search")?.value || "").toLowerCase();
+    document.querySelectorAll("#manager-bookings-list tr[data-search]").forEach(row => {
+        row.hidden = !row.dataset.search.includes(query);
+    });
 }
 
 async function manuallyReassign(bookingId, staffId) {
