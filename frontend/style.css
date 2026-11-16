@@ -941,6 +941,27 @@ body {
     max-width: min(380px, calc(100vw - 40px));
 }
 
+.loading-skeleton {
+    display: block;
+    min-width: 36px;
+    border-radius: 6px;
+    background: linear-gradient(90deg, #e2e8f0 24%, #f8fafc 50%, #e2e8f0 76%);
+    background-size: 200% 100%;
+    animation: cleanlondon-skeleton-shimmer 1.35s ease-in-out infinite;
+}
+
+@keyframes cleanlondon-skeleton-shimmer {
+    from { background-position: 100% 0; }
+    to { background-position: -100% 0; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .loading-skeleton {
+        animation: none;
+        background: #e2e8f0;
+    }
+}
+
 .toast {
     display: flex;
     gap: 10px;
@@ -1404,14 +1425,19 @@ body {
     color: var(--text-muted);
 }
 
-.auth-modal-footer a {
+.auth-modal-footer .auth-switch-link {
     color: var(--primary);
+    background: transparent;
+    border: 0;
     text-decoration: none;
+    font: inherit;
     font-weight: 700;
     margin-left: 4px;
+    padding: 0;
+    cursor: pointer;
 }
 
-.auth-modal-footer a:hover {
+.auth-modal-footer .auth-switch-link:hover {
     text-decoration: underline;
 }
 

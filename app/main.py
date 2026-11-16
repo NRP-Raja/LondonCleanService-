@@ -56,6 +56,15 @@ JWT_ALGORITHM = os.getenv("JWT_ALGORITHM", "HS256")
 ACCESS_TOKEN_EXPIRE_MINUTES = int(os.getenv("ACCESS_TOKEN_EXPIRE_MINUTES", "480"))
 
 MOCK_MODE = False if IS_PRODUCTION else (os.getenv("MOCK_MODE", "true").lower() == "true")
+DEMO_AUTH_ENABLED = os.getenv("DEMO_AUTH_ENABLED", "false").strip().lower() == "true"
+DEMO_AUTH_ALLOWED_ENVIRONMENTS = frozenset({"development", "staging"})
+DEMO_ACCOUNT_ROLES = {
+    "manager": ("admin@cleanlondon.co.uk", "manager"),
+    "staff": ("cleaner.elena@cleanlondon.co.uk", "staff"),
+    "staff_elena": ("cleaner.elena@cleanlondon.co.uk", "staff"),
+    "staff_marcus": ("cleaner.marcus@cleanlondon.co.uk", "staff"),
+    "customer": ("oliver.smith@example.co.uk", "customer"),
+}
 GOOGLE_CLIENT_ID = os.getenv("GOOGLE_CLIENT_ID", "mock-client-id.apps.googleusercontent.com")
 GOOGLE_MAPS_API_KEY = os.getenv("GOOGLE_MAPS_API_KEY", "MOCK_GOOGLE_MAPS_KEY_LONDON")
 
@@ -835,43 +844,39 @@ def google_oauth_login(payload: GoogleLoginSchema):
 def demo_switch_role(role: str = Body(..., embed=True)):
     """
     Convenience endpoint for review: Instantly generates a valid JWT
-    for the Manager, Staff, or Customer demo accounts.
-    Only available in development/staging environments.
+    for an explicitly approved demo account.
+    Requires DEMO_AUTH_ENABLED=true in development or staging.
     """
-    if IS_PRODUCTION:
+    if not DEMO_AUTH_ENABLED or ENVIRONMENT.strip().lower() not in DEMO_AUTH_ALLOWED_ENVIRONMENTS:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Not found"
         )
-    role_email_map = {
-        "manager": "admin@cleanlondon.co.uk",
-        "staff": "cleaner.elena@cleanlondon.co.uk",
-        "staff_elena": "cleaner.elena@cleanlondon.co.uk",
-        "staff_marcus": "cleaner.marcus@cleanlondon.co.uk",
-        "customer": "oliver.smith@example.co.uk"
-    }
-    if "@" in role:
-        target_email = role.lower()
-    else:
-        target_email = role_email_map.get(role.lower())
-
-    if not target_email:
-        raise HTTPException(status_code=400, detail="Invalid role. Choose 'manager', 'staff', 'customer', or a demo email.")
+    approved_account = DEMO_ACCOUNT_ROLES.get(role.strip().lower())
+    if not approved_account:
+        raise HTTPException(status_code=400, detail="Invalid demo role.")
+    target_email, expected_role = approved_account
 
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
-                SELECT u.id, u.email, u.full_name, r.name as role, u.avatar_url
+                SELECT u.id, u.email, u.full_name, r.name as role, u.avatar_url, u.is_active
                 FROM users u
                 JOIN roles r ON u.role_id = r.id
                 WHERE u.email = %s
             """, (target_email,))
             user = cursor.fetchone()
+            if not user or not user["is_active"] or user["role"] != expected_role:
+                raise HTTPException(status_code=404, detail="Not found")
+
             token = create_access_token({"user_id": user["id"], "role": user["role"]})
             return {
                 "access_token": token,
                 "token_type": "bearer",
-                "user": user
+                "user": {
+                    key: user[key]
+                    for key in ("id", "email", "full_name", "role", "avatar_url")
+                }
             }
 
 # ==========================================================
