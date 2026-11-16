@@ -112,7 +112,7 @@ def test_full_system():
 
     # 8. Test Cleaner Workflow & Sequential State Machine
     print("\n[Test 8] Testing Cleaner Operations & Status Machine...")
-    cleaner_role_target = "cleaner.elena@cleanlondon.co.uk" if "Elena" in assigned_cleaner else "cleaner.marcus@cleanlondon.co.uk"
+    cleaner_role_target = "staff_elena" if "Elena" in assigned_cleaner else "staff_marcus"
     r = requests.post(f"{BASE_URL}/api/auth/demo-switch", json={"role": cleaner_role_target})
     assert r.status_code == 200
     staff_token = r.json()["access_token"]
@@ -255,7 +255,9 @@ def test_full_system():
     assert cancel_data["policy_applied"] == "FREE_CANCELLATION"
     print(f" -> PASSED: >24h Free cancellation confirmed: Fee £{cancel_data['cancellation_fee_gbp']:.2f}, Refund £{cancel_data['refund_amount_gbp']:.2f}.")
 
-    # 15b: Create a booking for today (scheduled for this evening, <24h away) and cancel it -> 50% late fee applied
+    # 15b: Create a future booking within 24 hours and cancel it -> 50% late fee applied
+    late_start = datetime.datetime.now().replace(minute=0, second=0, microsecond=0) + datetime.timedelta(hours=3)
+    late_end = late_start + datetime.timedelta(hours=3)
     late_payload = {
         "service_id": 1,
         "property_type": "1-Bed Flat",
@@ -264,8 +266,8 @@ def test_full_system():
         "address_line1": "10 Downing Street",
         "city": "London",
         "postcode": "SW1A 2AA",
-        "scheduled_date": today_str,
-        "scheduled_time_slot": "18:00 - 21:00"
+        "scheduled_date": late_start.strftime("%Y-%m-%d"),
+        "scheduled_time_slot": f"{late_start:%H:%M} - {late_end:%H:%M}"
     }
     r_late = requests.post(f"{BASE_URL}/api/bookings", json=late_payload, headers=cust_headers)
     assert r_late.status_code == 200
@@ -356,8 +358,7 @@ def test_full_system():
     r_match_gdpr = requests.post(f"{BASE_URL}/api/manager/bookings/{gdpr_b_id}/auto-match", headers=mgr_headers)
     assert r_match_gdpr.status_code == 200
     assigned_cleaner_name = r_match_gdpr.json()["cleaner_name"]
-    cleaner_role_email = "cleaner.elena@cleanlondon.co.uk" if "Elena" in assigned_cleaner_name else "cleaner.marcus@cleanlondon.co.uk"
-    cleaner_role_name = "staff"
+    cleaner_role_name = "staff_elena" if "Elena" in assigned_cleaner_name else "staff_marcus"
 
     # Cleaner logs in while status is SCHEDULED
     r_cleaner_auth = requests.post(f"{BASE_URL}/api/auth/demo-switch", json={"role": cleaner_role_name})
