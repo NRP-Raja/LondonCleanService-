@@ -80,6 +80,25 @@ If a proposed label would be misleading based on the current API calculation, us
 
 ## 3. Target visual direction
 
+**Chosen style: modern, minimal SaaS — not a dense enterprise/fleet command-centre clone.**
+
+Treat the reference screenshot as inspiration for information hierarchy only. The final interface should feel closer to a contemporary, understated SaaS product:
+
+- Spacious layout with generous whitespace and a restrained number of components per screen.
+- Quiet neutral surfaces (off-white/light grey canvas, white cards), thin low-contrast borders and very subtle shadows.
+- Strong typography hierarchy with concise headings and muted supporting labels.
+- Compact, consistent KPI cards; avoid oversized metric tiles and decorative gradients.
+- A slim, unobtrusive sidebar with simple line icons and a clear active state.
+- One primary accent colour (CleanLondon teal/green) used sparingly for primary actions and positive states.
+- Semantic status colours used only when meaningful: amber for pending, red for blocked/failed, green/teal for successful.
+- Simple tables with comfortable row spacing, light dividers, subtle hover states and uncluttered action menus.
+- Small, purposeful charts only if they answer an operational question using real data. No chart just to fill space.
+- Responsive behaviour that preserves the calm visual hierarchy on tablet and mobile.
+
+Avoid the visual traits that make the reference feel overly busy: many competing badges, dense top-level counters, multiple strong accent colours, crowded toolbars, excessive borders, tiny uppercase text and large blocks of operational telemetry.
+
+Do not add glassmorphism, heavy gradients, neon colours, oversized rounded cards or excessive animation. Aim for polished, understated, practical and easy to scan.
+
 Create a polished, calm, desktop-first SaaS operations interface that remains usable on tablet and mobile.
 
 ### Overall shell
