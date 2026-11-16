@@ -6,6 +6,7 @@
     <title>CleanLondon | London's Trusted Domestic & Deep Cleaning Service</title>
     <link rel="icon" type="image/jpeg" href="/static/logo.jpg">
     <link rel="stylesheet" href="/static/style.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.css">
     <!-- Google Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -35,16 +36,16 @@
     <!-- Navigation Header -->
     <header class="navbar">
         <div class="nav-container">
-            <a href="/?view=home" class="brand-logo" onclick="navigateToHome(event)">
+            <a href="/" class="brand-logo" onclick="event.preventDefault(); navigateToHome(event)">
                 <img src="/static/logo.jpg" alt="CleanLondon Logo" class="brand-logo-img">
                 <span>Clean<strong>London</strong></span>
             </a>
 
             <nav class="nav-links">
-                <a href="/?view=home" class="nav-item" onclick="navigateToSection(event, 'services-section')">Services</a>
-                <a href="/?view=home" class="nav-item" onclick="navigateToSection(event, 'quote-section')">Instant Quote</a>
-                <a href="/?view=home" class="nav-item" onclick="navigateToSection(event, 'reviews-section')">Reviews</a>
-                <a href="#" class="nav-item hidden" id="nav-dashboard-link" onclick="navigateToDashboard(event)">Dashboard</a>
+                <a href="/?view=home" class="nav-item" onclick="event.preventDefault(); navigateToSection(event, 'services-section')">Services</a>
+                <a href="/?view=home" class="nav-item" onclick="event.preventDefault(); navigateToSection(event, 'quote-section')">Instant Quote</a>
+                <a href="/?view=home" class="nav-item" onclick="event.preventDefault(); navigateToSection(event, 'reviews-section')">Reviews</a>
+                <a href="/#dashboard" class="nav-item hidden" id="nav-dashboard-link" onclick="event.preventDefault(); navigateToDashboard(event)">Dashboard</a>
             </nav>
 
             <div class="nav-actions">
@@ -311,7 +312,7 @@
                             <div class="bookings-table-card">
                                 <div class="card-header space-between">
                                     <h3><i class="fa-solid fa-clock"></i> Working Hours</h3>
-                                    <button class="btn btn-sm btn-primary" onclick="saveStaffSchedule()">Save Hours</button>
+                                    <button class="btn btn-sm btn-primary" onclick="saveStaffSchedule(event.currentTarget)">Save Hours</button>
                                 </div>
                                 <p class="field-hint">Use one shift per weekday. Leave a day blank when unavailable.</p>
                                 <div id="staff-schedule-form"></div>
@@ -327,7 +328,7 @@
                                     <input type="date" id="staff-holiday-date">
                                     <input type="text" id="staff-holiday-reason" placeholder="Sick day / annual leave">
                                 </div>
-                                <button class="btn btn-outline btn-block" onclick="addStaffHoliday()">Mark Holiday / Sick Day</button>
+                                <button class="btn btn-outline btn-block" onclick="addStaffHoliday(event.currentTarget)">Mark Holiday / Sick Day</button>
                                 <div id="staff-holidays-list" class="field-hint"></div>
                             </div>
                         </div>
@@ -513,7 +514,7 @@
 
                 <div class="auth-modal-footer">
                     <span>Don't have an account?</span>
-                    <a href="#" onclick="switchToRegister(event)">Create an account</a>
+                    <button type="button" class="auth-switch-link" onclick="switchToRegister(event)">Create an account</button>
                 </div>
             </div>
         </div>
@@ -566,7 +567,7 @@
 
                 <div class="auth-modal-footer">
                     <span>Already have an account?</span>
-                    <a href="#" onclick="switchToLogin(event)">Log In</a>
+                    <button type="button" class="auth-switch-link" onclick="switchToLogin(event)">Log In</button>
                 </div>
             </div>
         </div>
@@ -746,6 +747,7 @@
     </footer>
 
     <div id="toast-region" class="toast-region" role="status" aria-live="polite" aria-atomic="true"></div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/flatpickr/4.6.13/flatpickr.min.js"></script>
     <script src="/static/app.js"></script>
 </body>
 </html>

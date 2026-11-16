@@ -159,14 +159,92 @@ document.addEventListener("keydown", event => {
 });
 
 function setButtonBusy(button, busy, label = "Working...") {
-    if (!button) return;
+    if (!button) return false;
     if (busy) {
+        if (button.disabled) return false;
         button.dataset.originalLabel = button.innerHTML;
+        button.dataset.wasSelect = button.tagName === "SELECT" ? "true" : "false";
+        if (button.dataset.wasSelect === "true") {
+            button.dataset.originalValue = button.value;
+        }
         button.disabled = true;
-        button.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${label}`;
+        if (button.dataset.wasSelect === "true") {
+            const loadingOption = document.createElement("option");
+            loadingOption.value = button.dataset.originalValue;
+            loadingOption.textContent = label;
+            button.replaceChildren(loadingOption);
+        } else {
+            button.innerHTML = `<i class="fa-solid fa-spinner fa-spin"></i> ${label}`;
+        }
     } else {
+        if (button.dataset.originalLabel !== undefined) {
+            button.innerHTML = button.dataset.originalLabel;
+            if (button.dataset.wasSelect === "true") {
+                button.value = button.dataset.originalValue;
+            }
+            delete button.dataset.originalLabel;
+            delete button.dataset.originalValue;
+            delete button.dataset.wasSelect;
+        }
         button.disabled = false;
-        button.innerHTML = button.dataset.originalLabel || button.innerHTML;
+    }
+    return true;
+}
+
+function renderTableSkeleton(tableBody, columnCount) {
+    const widths = ["82%", "68%", "91%", "57%"];
+    const cells = widths.map(width =>
+        `<span class="loading-skeleton" style="height:14px;width:${width}"></span>`
+    ).join("");
+    tableBody.innerHTML = Array.from({ length: 3 }, () => `
+        <tr aria-hidden="true">
+            <td colspan="${columnCount}">
+                <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;padding:5px 0">
+                    ${cells}
+                </div>
+            </td>
+        </tr>
+    `).join("");
+}
+
+function renderStaffJobsSkeleton(container) {
+    container.innerHTML = Array.from({ length: 3 }, () => `
+        <div style="display:grid;gap:12px;margin:12px;padding:16px;border:1px solid var(--border-color);border-radius:var(--radius-sm);background:#fff">
+            <span class="loading-skeleton" style="height:16px;width:48%"></span>
+            <span class="loading-skeleton" style="height:13px;width:90%"></span>
+            <span class="loading-skeleton" style="height:13px;width:72%"></span>
+        </div>
+    `).join("");
+}
+
+function renderLoaderError(container, message, retry, columnCount = null) {
+    const errorState = document.createElement("div");
+    errorState.className = "auth-alert error";
+    errorState.setAttribute("role", "alert");
+
+    const messageElement = document.createElement("p");
+    messageElement.textContent = message;
+    messageElement.style.margin = "0 0 10px";
+
+    const retryButton = document.createElement("button");
+    retryButton.type = "button";
+    retryButton.className = "btn btn-sm btn-outline-primary";
+    retryButton.textContent = "Retry";
+    retryButton.addEventListener("click", () => {
+        retryButton.disabled = true;
+        retry();
+    }, { once: true });
+
+    errorState.append(messageElement, retryButton);
+    if (container.tagName === "TBODY") {
+        const row = document.createElement("tr");
+        const cell = document.createElement("td");
+        cell.colSpan = columnCount || 1;
+        cell.append(errorState);
+        row.append(cell);
+        container.replaceChildren(row);
+    } else {
+        container.replaceChildren(errorState);
     }
 }
 
@@ -178,7 +256,21 @@ document.addEventListener("DOMContentLoaded", async () => {
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
     const dateInput = document.getElementById("book-date");
-    if (dateInput) {
+    if (dateInput && typeof window.flatpickr === "function") {
+        const datePicker = dateInput._flatpickr || window.flatpickr(dateInput, {
+            altInput: true,
+            altFormat: "d/m/Y",
+            dateFormat: "Y-m-d",
+            defaultDate: tomorrow,
+            minDate: "today",
+            disableMobile: true
+        });
+        if (datePicker.altInput) {
+            datePicker.altInput.id = "book-date-display";
+            datePicker.altInput.setAttribute("aria-label", "Cleaning date (day/month/year)");
+            document.querySelector('label[for="book-date"]')?.setAttribute("for", "book-date-display");
+        }
+    } else if (dateInput) {
         dateInput.value = tomorrow.toISOString().split("T")[0];
         dateInput.min = new Date().toISOString().split("T")[0];
     }
@@ -563,7 +655,11 @@ async function handleDemoRoleSwitch(roleName) {
             // Re-evaluate state
             await checkAuthState();
         } else {
-            showApiError(response, data, "Could not switch role. Please try again.");
+            if (response.status === 404) {
+                showToast("Demo role preview is unavailable in this environment.", "error");
+            } else {
+                showApiError(response, data, "Could not switch role. Please try again.");
+            }
         }
     } catch (err) {
         console.error("Demo role switch error:", err);
@@ -578,10 +674,14 @@ function setRoute(view, modal = null, replace = false) {
     const url = new URL(window.location.href);
     url.hash = "";
     url.search = "";
-    if (view && view !== "home") url.searchParams.set("view", view);
+    if (view === "dashboard" && !modal) {
+        url.hash = "dashboard";
+    } else if (view && view !== "home") {
+        url.searchParams.set("view", view);
+    }
     if (modal) url.searchParams.set("modal", modal);
     const method = replace ? "replaceState" : "pushState";
-    window.history[method]({ view, modal }, "", `${url.pathname}${url.search}`);
+    window.history[method]({ view, modal }, "", `${url.pathname}${url.search}${url.hash}`);
 }
 
 function navigateToSection(event, sectionId) {
@@ -594,9 +694,10 @@ function navigateToSection(event, sectionId) {
 
 function restoreRoute() {
     const params = new URLSearchParams(window.location.search);
-    const view = params.get("view") || "home";
+    const hashView = window.location.hash === "#dashboard" ? "dashboard" : null;
+    const view = params.get("view") || hashView || "home";
     const modal = params.get("modal");
-    if (window.location.hash) {
+    if (window.location.hash && !hashView) {
         window.history.replaceState({ view: "home" }, "", `${window.location.pathname}?view=home`);
     }
 
@@ -747,37 +848,38 @@ async function recalculateQuote() {
             if (modalTotal) modalTotal.textContent = `£${data.total_price_gbp.toFixed(2)}`;
         }
 
-        function savePendingQuote() {
-            localStorage.setItem(PENDING_QUOTE_KEY, JSON.stringify({
-                postcode: state.quote.postcode,
-                service_id: state.quote.service_id,
-                property_type: state.quote.property_type,
-                bedrooms: state.quote.bedrooms,
-                bathrooms: state.quote.bathrooms,
-                has_pets: state.quote.has_pets,
-                deep_clean_requested: state.quote.deep_clean,
-                total_price_gbp: state.quote.calculatedPrice,
-                estimated_hours: state.quote.estimatedHours
-            }));
-        }
-
-        function reopenPendingQuote() {
-            if (!state.user || state.user.role !== "customer") return;
-            const rawQuote = localStorage.getItem(PENDING_QUOTE_KEY);
-            if (!rawQuote) return;
-            try {
-                const pendingQuote = JSON.parse(rawQuote);
-                state.quote = { ...state.quote, ...pendingQuote, deep_clean: pendingQuote.deep_clean_requested };
-                localStorage.removeItem(PENDING_QUOTE_KEY);
-                openBookingModal();
-                showToast("Your saved quote is ready. Complete the details to continue.", "success");
-            } catch (error) {
-                localStorage.removeItem(PENDING_QUOTE_KEY);
-                console.error("Could not restore pending quote:", error);
-            }
-        }
     } catch (err) {
         console.error("Quote calculate error:", err);
+    }
+}
+
+function savePendingQuote() {
+    localStorage.setItem(PENDING_QUOTE_KEY, JSON.stringify({
+        postcode: state.quote.postcode,
+        service_id: state.quote.service_id,
+        property_type: state.quote.property_type,
+        bedrooms: state.quote.bedrooms,
+        bathrooms: state.quote.bathrooms,
+        has_pets: state.quote.has_pets,
+        deep_clean_requested: state.quote.deep_clean,
+        total_price_gbp: state.quote.calculatedPrice,
+        estimated_hours: state.quote.estimatedHours
+    }));
+}
+
+function reopenPendingQuote() {
+    if (!state.user || state.user.role !== "customer") return;
+    const rawQuote = localStorage.getItem(PENDING_QUOTE_KEY);
+    if (!rawQuote) return;
+    try {
+        const pendingQuote = JSON.parse(rawQuote);
+        state.quote = { ...state.quote, ...pendingQuote, deep_clean: pendingQuote.deep_clean_requested };
+        localStorage.removeItem(PENDING_QUOTE_KEY);
+        openBookingModal();
+        showToast("Your saved quote is ready. Complete the details to continue.", "success");
+    } catch (error) {
+        localStorage.removeItem(PENDING_QUOTE_KEY);
+        console.error("Could not restore pending quote:", error);
     }
 }
 
@@ -937,19 +1039,22 @@ async function initiateStripeCheckout(bookingId) {
 async function loadCustomerBookings() {
     if (!state.token) return;
     const listBody = document.getElementById("customer-bookings-list");
-    listBody.innerHTML = `<tr><td colspan="8" class="text-center">Loading your London bookings...</td></tr>`;
+    if (!listBody) return;
+    document.getElementById("customer-booking-progress")?.classList.add("hidden");
+    renderTableSkeleton(listBody, 8);
 
     try {
         const res = await authFetch(`${API_BASE}/api/bookings/my`);
-        const data = await res.json().catch(() => ({}));
         if (!res.ok) {
-            showApiError(res, data, "Could not load your bookings. Please try again.");
+            renderLoaderError(listBody, "We couldn't load your bookings. Please try again.", () => loadCustomerBookings(), 8);
             return;
         }
-        if (data.bookings) {
+        const data = await res.json().catch(() => ({}));
+        if (Array.isArray(data.bookings)) {
             state.customerBookings = data.bookings;
             if (data.bookings.length === 0) {
                 listBody.innerHTML = `<tr><td colspan="8" class="text-center">No bookings found. Click "Book a Clean" to schedule one!</td></tr>`;
+                document.getElementById("customer-booking-progress")?.classList.add("hidden");
                 return;
             }
 
@@ -991,7 +1096,7 @@ async function loadCustomerBookings() {
                         ${payPart}
                         <div style="display:flex; gap:4px; flex-wrap:wrap;">
                             <button class="btn btn-sm btn-outline-primary" onclick="openRescheduleModal(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)})" title="Reschedule Appointment" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-calendar-days"></i> Reschedule</button>
-                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)}, ${Number(b.total_price_gbp)})" title="Cancel Booking" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-ban"></i> Cancel</button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)}, ${Number(b.total_price_gbp)}, event.currentTarget)" title="Cancel Booking" style="font-size:0.75rem; padding:3px 7px;"><i class="fa-solid fa-ban"></i> Cancel</button>
                         </div>
                     `;
                 } else {
@@ -999,7 +1104,7 @@ async function loadCustomerBookings() {
                         <div class="customer-actions">
                             <button class="btn btn-sm btn-outline" onclick="showBookingInstructions(${Number(b.id)})"><i class="fa-solid fa-key"></i> View Instructions</button>
                             <button class="btn btn-sm btn-outline-primary" onclick="openRescheduleModal(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)})"><i class="fa-solid fa-calendar-days"></i> Reschedule</button>
-                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)}, ${Number(b.total_price_gbp)})"><i class="fa-solid fa-ban"></i> Cancel</button>
+                            <button class="btn btn-sm btn-outline-danger" onclick="cancelCustomerBooking(${Number(b.id)}, ${inlineJsArgument(b.reference_code)}, ${inlineJsArgument(b.scheduled_date)}, ${inlineJsArgument(b.scheduled_time_slot)}, ${Number(b.total_price_gbp)}, event.currentTarget)"><i class="fa-solid fa-ban"></i> Cancel</button>
                             <button class="btn btn-sm btn-outline" onclick="downloadReceipt(${Number(b.id)})"><i class="fa-solid fa-download"></i> Receipt</button>
                         </div>`;
                 }
@@ -1027,10 +1132,13 @@ async function loadCustomerBookings() {
                 `;
             }).join("");
             renderCustomerProgress(data.bookings);
+        } else {
+            renderLoaderError(listBody, "We couldn't load your bookings. Please try again.", () => loadCustomerBookings(), 8);
         }
     } catch (err) {
         if (err.message !== "Session expired") {
             console.error("Load customer bookings err:", err);
+            renderLoaderError(listBody, "We couldn't load your bookings. Please try again.", () => loadCustomerBookings(), 8);
         }
     }
 }
@@ -1038,7 +1146,7 @@ async function loadCustomerBookings() {
 // ==========================================================
 // CANCELLATION & RESCHEDULING ACTIONS (CUSTOMER)
 // ==========================================================
-async function cancelCustomerBooking(bookingId, refCode, scheduledDate, scheduledTimeSlot, totalPrice) {
+async function cancelCustomerBooking(bookingId, refCode, scheduledDate, scheduledTimeSlot, totalPrice, button) {
     // Check cancellation notice window
     const now = new Date();
     const startTimeStr = (scheduledTimeSlot.match(/\d{1,2}:\d{2}/) || ["09:00"])[0];
@@ -1056,6 +1164,7 @@ async function cancelCustomerBooking(bookingId, refCode, scheduledDate, schedule
 
     const confirmMsg = `Are you sure you want to cancel booking ${refCode}?\n\n${feeWarning}`;
     if (!confirm(confirmMsg)) return;
+    if (!setButtonBusy(button, true, "Cancelling...")) return;
 
     try {
         const res = await authFetch(`${API_BASE}/api/bookings/${bookingId}/cancel`, {
@@ -1066,7 +1175,7 @@ async function cancelCustomerBooking(bookingId, refCode, scheduledDate, schedule
         const data = await res.json();
         if (res.ok) {
             showToast(data.policy_note ? "Booking " + refCode + " cancelled: " + data.policy_note : "Booking " + refCode + " cancelled.", "success");
-            loadCustomerBookings();
+            await loadCustomerBookings();
         } else {
             showApiError(res, data, "Could not cancel this booking. Please try again.");
         }
@@ -1074,6 +1183,8 @@ async function cancelCustomerBooking(bookingId, refCode, scheduledDate, schedule
         if (err.message !== "Session expired") {
             showToast("Could not contact the cancellation service. Please try again.", "error");
         }
+    } finally {
+        setButtonBusy(button, false);
     }
 }
 
@@ -1103,9 +1214,7 @@ async function submitReschedule(e) {
     const newTimeslot = document.getElementById("reschedule-timeslot").value;
 
     const submitBtn = document.getElementById("reschedule-submit-btn");
-    const origText = submitBtn.innerHTML;
-    submitBtn.disabled = true;
-    submitBtn.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> Rescheduling...';
+    if (!setButtonBusy(submitBtn, true, "Rescheduling...")) return;
 
     try {
         const res = await authFetch(`${API_BASE}/api/bookings/${bookingId}/reschedule`, {
@@ -1131,8 +1240,7 @@ async function submitReschedule(e) {
             showToast("Could not submit the reschedule request. Please try again.", "error");
         }
     } finally {
-        submitBtn.disabled = false;
-        submitBtn.innerHTML = origText;
+        setButtonBusy(submitBtn, false);
     }
 }
 
@@ -1163,6 +1271,8 @@ async function submitReview(e) {
     const bookingId = document.getElementById("review-booking-id").value;
     const rating = parseInt(document.getElementById("review-stars-val").value);
     const comment = document.getElementById("review-comment").value;
+    const submitBtn = e.currentTarget.querySelector('button[type="submit"]');
+    if (!setButtonBusy(submitBtn, true, "Submitting review...")) return;
 
     try {
         const res = await authFetch(`${API_BASE}/api/bookings/${bookingId}/review`, {
@@ -1187,6 +1297,8 @@ async function submitReview(e) {
         if (err.message !== "Session expired") {
             showToast("Could not save your review. Please try again.", "error");
         }
+    } finally {
+        setButtonBusy(submitBtn, false);
     }
 }
 
@@ -1196,13 +1308,17 @@ async function submitReview(e) {
 async function loadStaffJobs() {
     if (!state.token) return;
     const container = document.getElementById("staff-jobs-container");
-    container.innerHTML = `<div class="p-4 text-center">Loading assigned tasks...</div>`;
+    if (!container) return;
+    renderStaffJobsSkeleton(container);
 
     try {
         const res = await authFetch(`${API_BASE}/api/staff/jobs`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.jobs) {
+        if (!res.ok) {
+            renderLoaderError(container, "We couldn't load your jobs. Please try again.", () => loadStaffJobs());
+            return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (Array.isArray(data.jobs)) {
             state.staffJobs = data.jobs;
             if (data.jobs.length === 0) {
                 state.activeJobForMap = null;
@@ -1214,11 +1330,11 @@ async function loadStaffJobs() {
             container.innerHTML = data.jobs.map((j, index) => {
                 let nextActionBtn = "";
                 if (j.status === "SCHEDULED") {
-                    nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="advanceJobStatus(${j.id}, 'EN_ROUTE')"><i class="fa-solid fa-person-walking"></i> Start: En Route</button>`;
+                    nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="advanceJobStatus(${j.id}, 'EN_ROUTE', event.currentTarget)"><i class="fa-solid fa-person-walking"></i> Start: En Route</button>`;
                 } else if (j.status === "EN_ROUTE") {
-                    nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="advanceJobStatus(${j.id}, 'IN_PROGRESS')"><i class="fa-solid fa-play"></i> Arrived: Begin Clean</button>`;
+                    nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="advanceJobStatus(${j.id}, 'IN_PROGRESS', event.currentTarget)"><i class="fa-solid fa-play"></i> Arrived: Begin Clean</button>`;
                 } else if (j.status === "IN_PROGRESS") {
-                nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="completeJobWithChecklist(${j.id})"><i class="fa-solid fa-circle-check"></i> Complete & Sign Off</button>`;
+                    nextActionBtn = `<button class="btn btn-sm btn-primary" onclick="completeJobWithChecklist(${j.id}, event.currentTarget)"><i class="fa-solid fa-circle-check"></i> Complete & Sign Off</button>`;
                 } else {
                     nextActionBtn = `<span class="text-emerald"><i class="fa-solid fa-check"></i> Clean Completed</span>`;
                 }
@@ -1263,17 +1379,21 @@ async function loadStaffJobs() {
             if (activeJobId && data.jobs.some(job => job.id === activeJobId)) {
                 selectJobForMap(activeJobId);
             } else {
-                selectJobForMap(data.jobs[0].id);
+                    selectJobForMap(data.jobs[0].id);
+                }
+            } else {
+                renderLoaderError(container, "We couldn't load your jobs. Please try again.", () => loadStaffJobs());
+            }
+        } catch (err) {
+            if (err.message !== "Session expired") {
+                console.error("Staff jobs error:", err);
+                renderLoaderError(container, "We couldn't load your jobs. Please try again.", () => loadStaffJobs());
             }
         }
-    } catch (err) {
-        if (err.message !== "Session expired") {
-            console.error("Staff jobs error:", err);
-        }
     }
-}
 
-async function advanceJobStatus(bookingId, targetStatus) {
+async function advanceJobStatus(bookingId, targetStatus, button) {
+    if (!setButtonBusy(button, true, "Updating status...")) return;
     try {
         const res = await authFetch(`${API_BASE}/api/staff/jobs/${bookingId}/status`, {
             method: "PATCH",
@@ -1291,17 +1411,19 @@ async function advanceJobStatus(bookingId, targetStatus) {
         if (err.message !== "Session expired") {
             showToast("Could not update this job. Please try again.", "error");
         }
+    } finally {
+        setButtonBusy(button, false);
     }
 }
 
-function completeJobWithChecklist(bookingId) {
+function completeJobWithChecklist(bookingId, button) {
     const card = [...document.querySelectorAll(".job-card")].find(item => Number(item.dataset.jobId) === Number(bookingId));
     const checks = card ? [...card.querySelectorAll(".room-check")] : [];
     if (checks.length && !checks.every(checkbox => checkbox.checked)) {
         showToast("Complete all four room checks before signing off this job.", "error");
         return;
     }
-    advanceJobStatus(bookingId, "COMPLETED");
+    advanceJobStatus(bookingId, "COMPLETED", button);
 }
 const STAFF_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
@@ -1328,7 +1450,7 @@ async function loadStaffSchedule() {
             `<button class="btn btn-sm btn-outline" onclick="removeStaffHoliday(${inlineJsArgument(h.holiday_date)})">Remove</button>`).join("<br>");
 }
 
-async function saveStaffSchedule() {
+async function saveStaffSchedule(button) {
     const schedule = [...document.querySelectorAll(".staff-day-enabled:checked")].map(input => {
         const day = input.dataset.day;
         return {
@@ -1337,16 +1459,25 @@ async function saveStaffSchedule() {
             end_time: document.querySelector(`.staff-day-end[data-day="${day}"]`).value
         };
     });
-    const res = await authFetch(`${API_BASE}/api/staff/schedule`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(schedule)
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-        showToast("Working hours saved.", "success");
-    } else {
-        showApiError(res, data, "Could not save working hours. Please try again.");
+    if (!setButtonBusy(button, true, "Saving hours...")) return;
+    try {
+        const res = await authFetch(`${API_BASE}/api/staff/schedule`, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(schedule)
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+            showToast("Working hours saved.", "success");
+        } else {
+            showApiError(res, data, "Could not save working hours. Please try again.");
+        }
+    } catch (err) {
+        if (err.message !== "Session expired") {
+            showToast("Could not save working hours. Please try again.", "error");
+        }
+    } finally {
+        setButtonBusy(button, false);
     }
 }
 
@@ -1360,20 +1491,29 @@ async function loadStaffEarnings() {
     document.getElementById("staff-earnings-meta").textContent = `Completed jobs: ${data.completed_jobs} (70% cleaner share)`;
 }
 
-async function addStaffHoliday() {
+async function addStaffHoliday(button) {
     const holidayDate = document.getElementById("staff-holiday-date").value;
     if (!holidayDate) return showToast("Choose a holiday or sick-day date.", "error");
-    const res = await authFetch(`${API_BASE}/api/staff/holidays`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ holiday_date: holidayDate, reason: document.getElementById("staff-holiday-reason").value })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-        showToast("Holiday saved.", "success");
-        await loadStaffSchedule();
-    } else {
-        showApiError(res, data, "Could not save the holiday. Please try again.");
+    if (!setButtonBusy(button, true, "Saving holiday...")) return;
+    try {
+        const res = await authFetch(`${API_BASE}/api/staff/holidays`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ holiday_date: holidayDate, reason: document.getElementById("staff-holiday-reason").value })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+            showToast("Holiday saved.", "success");
+            await loadStaffSchedule();
+        } else {
+            showApiError(res, data, "Could not save the holiday. Please try again.");
+        }
+    } catch (err) {
+        if (err.message !== "Session expired") {
+            showToast("Could not save the holiday. Please try again.", "error");
+        }
+    } finally {
+        setButtonBusy(button, false);
     }
 }
 
@@ -1433,29 +1573,38 @@ async function loadManagerStaffVetting() {
             <td><input type="checkbox" id="dbs-${Number(staff.id)}" ${staff.verified_dbs ? "checked" : ""}></td>
             <td><input type="checkbox" id="rtw-${Number(staff.id)}" ${staff.right_to_work_verified ? "checked" : ""}></td>
             <td>${escapeHtml(staff.vetting_status || "PENDING")}</td>
-            <td><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${Number(staff.id)})">Save & Activate</button></td>
+            <td><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${Number(staff.id)}, event.currentTarget)">Save & Activate</button></td>
         </tr>`).join("");
 }
 
-async function updateStaffVetting(staffId) {
+async function updateStaffVetting(staffId, button) {
     const dbs = document.getElementById(`dbs-${staffId}`).checked;
     const rtw = document.getElementById(`rtw-${staffId}`).checked;
-    const res = await authFetch(`${API_BASE}/api/manager/staff/${staffId}/vetting`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-            verified_dbs: dbs,
-            right_to_work_verified: rtw,
-            vetting_status: dbs && rtw ? "APPROVED" : "PENDING"
-        })
-    });
-    const data = await res.json().catch(() => ({}));
-    if (res.ok) {
-        showToast("Vetting record saved.", "success");
-        loadManagerStaffVetting();
+    if (!setButtonBusy(button, true, "Saving vetting...")) return;
+    try {
+        const res = await authFetch(`${API_BASE}/api/manager/staff/${staffId}/vetting`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                verified_dbs: dbs,
+                right_to_work_verified: rtw,
+                vetting_status: dbs && rtw ? "APPROVED" : "PENDING"
+            })
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok) {
+            showToast("Vetting record saved.", "success");
+            await loadManagerStaffVetting();
     } else {
         showApiError(res, data, "Could not save the vetting record. Please try again.");
     }
+} catch (err) {
+    if (err.message !== "Session expired") {
+        showToast("Could not save the vetting record. Please try again.", "error");
+    }
+} finally {
+    setButtonBusy(button, false);
+}
 }
 
 async function loadManagerKPIs() {
@@ -1480,13 +1629,17 @@ async function loadManagerKPIs() {
 async function loadManagerBookings() {
     const filter = document.getElementById("manager-status-filter").value;
     const tableBody = document.getElementById("manager-bookings-list");
-    tableBody.innerHTML = `<tr><td colspan="9" class="text-center">Loading platform bookings...</td></tr>`;
+    if (!tableBody) return;
+    renderTableSkeleton(tableBody, 9);
 
     try {
         const res = await authFetch(`${API_BASE}/api/manager/bookings?status_filter=${filter}`);
-        if (!res.ok) return;
-        const data = await res.json();
-        if (data.bookings) {
+        if (!res.ok) {
+            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 9);
+            return;
+        }
+        const data = await res.json().catch(() => ({}));
+        if (Array.isArray(data.bookings)) {
             const today = new Date().toISOString().slice(0, 10);
             const visibleBookings = state.managerQuickFilter === "UNASSIGNED"
                 ? data.bookings.filter(b => !b.staff_id)
@@ -1502,43 +1655,47 @@ async function loadManagerBookings() {
 
             const staffByBooking = Object.fromEntries(await Promise.all(visibleBookings.map(async b => {
                 const staffRes = await authFetch(`${API_BASE}/api/manager/staff?postcode=${encodeURIComponent(b.postcode)}&scheduled_date=${encodeURIComponent(b.scheduled_date)}`);
-                return [b.id, staffRes.ok ? (await staffRes.json()).staff : []];
+                if (!staffRes.ok) throw new Error("Could not load cleaner assignment options");
+                const staffData = await staffRes.json();
+                return [b.id, staffData.staff || []];
             })));
             tableBody.innerHTML = visibleBookings.map(b => {
                 let actionControls = "";
                 if (!b.staff_id) {
                     actionControls = `
-                        <button class="btn btn-sm btn-primary" onclick="autoMatchCleaner(${Number(b.id)})" title="Auto-match nearest cleaner">
+                        <button class="btn btn-sm btn-primary" onclick="autoMatchCleaner(${Number(b.id)}, event.currentTarget)" title="Auto-match nearest cleaner">
                             <i class="fa-solid fa-bolt"></i> Auto-Match
                         </button>
                         <button class="btn btn-sm btn-outline-primary" onclick="openManualAssignment(${Number(b.id)})"><i class="fa-solid fa-user-check"></i> Assign</button>
                     `;
-                } else {
-                    const staffOptions = (staffByBooking[b.id] || []).map(staff =>
-                        `<option value="${Number(staff.id)}">${escapeHtml(staff.full_name)} — ${escapeHtml(staff.base_postcode)} (${escapeHtml(staff.distance_miles ?? "—")} mi) • ${escapeHtml(staff.jobs_today)} jobs today</option>`
-                    ).join("");
-                    actionControls = `
-                    <select onchange="manuallyReassign(${Number(b.id)}, this.value)" class="assignment-select">
-                            <option value="">Reassign...</option>
-                        ${staffOptions}
-                        </select>
-                    `;
-                }
-
-                return `
-                    <tr data-booking-id="${Number(b.id)}" data-search="${escapeHtml(`${b.reference_code} ${b.postcode} ${b.customer_name || ""} ${b.staff_name || ""}`.toLowerCase())}">
-                        <td data-label="Reference"><strong>${escapeHtml(b.reference_code)}</strong></td>
-                        <td data-label="Customer">${escapeHtml(b.customer_name)}<br><small class="text-muted">${escapeHtml(b.customer_phone)}</small></td>
-                        <td data-label="Postcode"><span class="badge-trust" style="margin:0; padding:2px 6px;">${escapeHtml(b.postcode)}</span></td>
-                        <td data-label="Service">${escapeHtml(b.service_name)}</td>
-                        <td data-label="Date & slot">${escapeHtml(b.scheduled_date)}<br><small>${escapeHtml(b.scheduled_time_slot)}</small></td>
-                        <td data-label="Value"><strong>£${parseFloat(b.total_price_gbp).toFixed(2)}</strong></td>
-                        <td data-label="Status"><span class="status-badge ${escapeHtml(b.status)}">${escapeHtml(b.status.replace('_', ' '))}</span></td>
-                        <td data-label="Cleaner">${b.staff_name ? escapeHtml(b.staff_name) : '<span style="color:#e11d48; font-weight:700;"><i class="fa-solid fa-circle-exclamation"></i> Unassigned</span>'}</td>
-                        <td data-label="Actions">${actionControls}</td>
-                    </tr>
+            } else {
+                const staffOptions = (staffByBooking[b.id] || []).map(staff =>
+                    `<option value="${Number(staff.id)}">${escapeHtml(staff.full_name)} — ${escapeHtml(staff.base_postcode)} (${escapeHtml(staff.distance_miles ?? "—")} mi) • ${escapeHtml(staff.jobs_today)} jobs today</option>`
+                ).join("");
+                actionControls = `
+                <select onchange="manuallyReassign(${Number(b.id)}, this.value, this)" class="assignment-select">
+                        <option value="">Reassign...</option>
+                    ${staffOptions}
+                    </select>
                 `;
-            }).join("");
+            }
+
+            return `
+                <tr data-booking-id="${Number(b.id)}" data-search="${escapeHtml(`${b.reference_code} ${b.postcode} ${b.customer_name || ""} ${b.staff_name || ""}`.toLowerCase())}">
+                    <td data-label="Reference"><strong>${escapeHtml(b.reference_code)}</strong></td>
+                    <td data-label="Customer">${escapeHtml(b.customer_name)}<br><small class="text-muted">${escapeHtml(b.customer_phone)}</small></td>
+                    <td data-label="Postcode"><span class="badge-trust" style="margin:0; padding:2px 6px;">${escapeHtml(b.postcode)}</span></td>
+                    <td data-label="Service">${escapeHtml(b.service_name)}</td>
+                    <td data-label="Date & slot">${escapeHtml(b.scheduled_date)}<br><small>${escapeHtml(b.scheduled_time_slot)}</small></td>
+                    <td data-label="Value"><strong>£${parseFloat(b.total_price_gbp).toFixed(2)}</strong></td>
+                    <td data-label="Status"><span class="status-badge ${escapeHtml(b.status)}">${escapeHtml(b.status.replace('_', ' '))}</span></td>
+                    <td data-label="Cleaner">${b.staff_name ? escapeHtml(b.staff_name) : '<span style="color:#e11d48; font-weight:700;"><i class="fa-solid fa-circle-exclamation"></i> Unassigned</span>'}</td>
+                    <td data-label="Actions">${actionControls}</td>
+                </tr>
+            `;
+        }).join("");
+        } else {
+            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 9);
         }
 
         function setManagerFilter(filter) {
@@ -1606,11 +1763,13 @@ async function loadManagerBookings() {
     } catch (err) {
         if (err.message !== "Session expired") {
             console.error("Manager bookings load error:", err);
+            renderLoaderError(tableBody, "We couldn't load manager bookings. Please try again.", () => loadManagerBookings(), 9);
         }
     }
 }
 
-async function autoMatchCleaner(bookingId) {
+async function autoMatchCleaner(bookingId, button) {
+    if (!setButtonBusy(button, true, "Matching cleaner...")) return;
     try {
         const res = await authFetch(`${API_BASE}/api/manager/bookings/${bookingId}/auto-match`, {
             method: "POST"
@@ -1618,7 +1777,7 @@ async function autoMatchCleaner(bookingId) {
         const data = await res.json();
         if (res.ok) {
             showToast(data.message || "Cleaner assigned successfully.", "success");
-            loadManagerData();
+            await loadManagerData();
         } else {
             showApiError(res, data, "Could not auto-match a cleaner. Please try again.");
         }
@@ -1626,6 +1785,8 @@ async function autoMatchCleaner(bookingId) {
         if (err.message !== "Session expired") {
             showToast("Could not auto-match a cleaner. Please try again.", "error");
         }
+    } finally {
+        setButtonBusy(button, false);
     }
 }
 
@@ -1651,8 +1812,9 @@ function filterManagerBookings() {
     });
 }
 
-async function manuallyReassign(bookingId, staffId) {
+async function manuallyReassign(bookingId, staffId, control) {
     if (!staffId) return;
+    if (!setButtonBusy(control, true, "Assigning cleaner...")) return;
     try {
         const res = await authFetch(`${API_BASE}/api/manager/bookings/${bookingId}/reassign`, {
             method: "POST",
@@ -1662,7 +1824,7 @@ async function manuallyReassign(bookingId, staffId) {
         const data = await res.json();
         if (res.ok) {
             showToast("Staff assigned successfully.", "success");
-            loadManagerData();
+            await loadManagerData();
         } else {
             showApiError(res, data, "Could not assign the cleaner. Please try again.");
         }
@@ -1670,5 +1832,7 @@ async function manuallyReassign(bookingId, staffId) {
         if (err.message !== "Session expired") {
             showToast("Could not assign the cleaner. Please try again.", "error");
         }
+    } finally {
+        setButtonBusy(control, false);
     }
 }
