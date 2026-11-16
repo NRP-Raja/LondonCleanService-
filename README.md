@@ -254,7 +254,7 @@ pip install -r requirements.txt
 cp .env.example .env
 
 # 3. Start the FastAPI server
-uvicorn main:app --reload --port 8000
+uvicorn app.main:app --reload --port 8000
 ```
 Open `http://127.0.0.1:8000` in your web browser.
 
