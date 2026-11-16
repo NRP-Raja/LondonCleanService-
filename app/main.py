@@ -286,6 +286,35 @@ def get_db():
         release_db_connection(conn)
 
 
+def get_idempotency_key(request: Request, payload_key: Optional[str] = None) -> Optional[str]:
+    """Prefer the standard header while retaining compatibility with older clients."""
+    header_key = request.headers.get("Idempotency-Key")
+    if header_key and payload_key and header_key != payload_key:
+        raise HTTPException(
+            status_code=400,
+            detail="Idempotency-Key header does not match the request payload.",
+        )
+    key = header_key or payload_key
+    if key and (len(key) > 100 or not re.fullmatch(r"[A-Za-z0-9._:-]+", key)):
+        raise HTTPException(status_code=400, detail="Invalid Idempotency-Key.")
+    return key
+
+
+@contextmanager
+def get_transaction():
+    """Provide an explicit transaction for operations that require row locking."""
+    conn = get_db_connection()
+    try:
+        conn.begin()
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        release_db_connection(conn)
+
+
 def queue_notification(cursor, recipient_user_id: Optional[int], recipient_address: str,
                        subject: str, body: str) -> None:
     """Persist every notification and deliver it to local SMTP/Mailpit when available."""
@@ -917,19 +946,29 @@ def _compute_quote(payload: QuoteRequestSchema) -> dict:
 # 3. BOOKINGS (CUSTOMER)
 # ==========================================================
 @app.post("/api/bookings", tags=["Bookings"])
-def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_role(["customer", "manager"]))):
+def create_booking(
+    payload: BookingCreateSchema,
+    request: Request,
+    user: dict = Depends(require_role(["customer", "manager"])),
+):
     # Calculate price based on service
+    idempotency_key = get_idempotency_key(request, payload.idempotency_key)
     with get_db() as conn:
         with conn.cursor() as cursor:
             # 1. Idempotency Check: Return existing booking if same idempotency_key was already processed
-            if payload.idempotency_key:
+            if idempotency_key:
                 cursor.execute("""
-                    SELECT id, reference_code, total_price_gbp, status, payment_status, created_at
+                    SELECT id, customer_id, reference_code, total_price_gbp, status, payment_status, created_at
                     FROM bookings
-                    WHERE idempotency_key = %s AND customer_id = %s
-                """, (payload.idempotency_key, user["id"]))
+                    WHERE idempotency_key = %s
+                """, (idempotency_key,))
                 existing_idem = cursor.fetchone()
                 if existing_idem:
+                    if existing_idem["customer_id"] != user["id"]:
+                        raise HTTPException(
+                            status_code=409,
+                            detail="The supplied Idempotency-Key has already been used.",
+                        )
                     return {
                         "message": "Booking request recognized (idempotent replay)",
                         "booking_id": existing_idem["id"],
@@ -1003,7 +1042,7 @@ def create_booking(payload: BookingCreateSchema, user: dict = Depends(require_ro
                     %s, %s, %s, 'SCHEDULED', 'PENDING'
                 )
             """, (
-                reference_code, payload.idempotency_key, user["id"], payload.service_id,
+                reference_code, idempotency_key, user["id"], payload.service_id,
                 payload.property_type, payload.bedrooms, payload.bathrooms, payload.has_pets,
                 payload.deep_clean_requested, payload.eco_cleaning_products,
                 payload.address_line1, payload.address_line2, payload.city, payload.postcode,
@@ -1132,6 +1171,30 @@ def cancel_booking(
                 policy_applied = "50_PERCENT_LATE_FEE"
 
             new_payment_status = "REFUNDED" if booking["payment_status"] == "PAID" else "PENDING"
+
+            if booking["payment_status"] == "PAID" and refund_amount > 0:
+                payment_intent_id = booking.get("stripe_payment_intent_id")
+                is_mock_stripe = not STRIPE_SECRET_KEY or "mock" in STRIPE_SECRET_KEY.lower()
+                if not is_mock_stripe and not payment_intent_id:
+                    raise HTTPException(
+                        status_code=409,
+                        detail="Paid booking has no payment reference; refund cannot be safely issued.",
+                    )
+                if not is_mock_stripe and payment_intent_id:
+                    try:
+                        stripe.Refund.create(
+                            payment_intent=payment_intent_id,
+                            amount=int(round(refund_amount * 100)),
+                            metadata={
+                                "booking_id": str(booking_id),
+                                "policy": policy_applied,
+                            },
+                        )
+                    except stripe.error.StripeError as exc:
+                        raise HTTPException(
+                            status_code=502,
+                            detail="The payment provider rejected the refund. The booking was not cancelled.",
+                        ) from exc
 
             cursor.execute("""
                 UPDATE bookings
@@ -1690,14 +1753,17 @@ def update_staff_vetting(
 
 @app.post("/api/manager/bookings/{booking_id}/assign", tags=["Manager"])
 def assign_staff_to_booking(booking_id: int, payload: AssignStaffSchema, user: dict = Depends(require_role(["manager"]))):
-    with get_db() as conn:
+    with get_transaction() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT id, full_name, email FROM users WHERE id = %s AND role_id = 2", (payload.staff_id,))
+            cursor.execute(
+                "SELECT id, full_name, email FROM users WHERE id = %s AND role_id = 2 FOR UPDATE",
+                (payload.staff_id,),
+            )
             staff = cursor.fetchone()
             if not staff:
                 raise HTTPException(status_code=404, detail="Cleaner staff not found")
 
-            cursor.execute("SELECT * FROM bookings WHERE id = %s", (booking_id,))
+            cursor.execute("SELECT * FROM bookings WHERE id = %s FOR UPDATE", (booking_id,))
             booking = cursor.fetchone()
             if not booking:
                 raise HTTPException(status_code=404, detail="Booking not found")
@@ -1745,12 +1811,16 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
     Matches unassigned booking with the nearest available cleaner based on London postcodes,
     verifying cleaner schedule availability and London TfL travel buffers.
     """
-    with get_db() as conn:
+    with get_transaction() as conn:
         with conn.cursor() as cursor:
-            cursor.execute("SELECT * FROM bookings WHERE id = %s", (booking_id,))
+            cursor.execute("SELECT * FROM bookings WHERE id = %s FOR UPDATE", (booking_id,))
             booking = cursor.fetchone()
             if not booking:
                 raise HTTPException(status_code=404, detail="Booking not found")
+            if booking["status"] == "CANCELLED":
+                raise HTTPException(status_code=400, detail="Cancelled bookings cannot be auto-matched")
+            if booking["staff_id"]:
+                raise HTTPException(status_code=409, detail="Booking is already assigned to a cleaner")
 
             booking_coords = resolve_postcode_coords(booking["postcode"])
 
@@ -1772,6 +1842,10 @@ def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["mana
             ranked_cleaners = []
             conflict_reasons = []
             for cleaner in cleaners:
+                cursor.execute(
+                    "SELECT id FROM users WHERE id = %s FOR UPDATE",
+                    (cleaner["id"],),
+                )
                 unavailable, availability_reason = check_staff_availability(
                     cursor, cleaner["id"], booking["scheduled_date"], booking["scheduled_time_slot"]
                 )
@@ -1885,12 +1959,17 @@ def calculate_distance(payload: DistanceRequestSchema):
 # 7. STRIPE PAYMENT GATEWAY & WEBHOOKS
 # ==========================================================
 @app.post("/api/payments/create-checkout-session", tags=["Payments"])
-def create_checkout_session(payload: CreateCheckoutSessionSchema, user: dict = Depends(require_role(["customer", "manager"]))):
+def create_checkout_session(
+    payload: CreateCheckoutSessionSchema,
+    request: Request,
+    user: dict = Depends(require_role(["customer", "manager"])),
+):
     """
     Creates a Stripe Checkout Session for a CleanLondon booking in GBP (£).
     If valid Stripe API credentials are present, communicates with Stripe API.
     Otherwise, activates realistic mock mode with zero-friction checkout URL.
     """
+    idempotency_key = get_idempotency_key(request)
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
@@ -1957,6 +2036,7 @@ def create_checkout_session(payload: CreateCheckoutSessionSchema, user: dict = D
                         },
                         success_url=success_url,
                         cancel_url=cancel_url,
+                        idempotency_key=idempotency_key,
                     )
                     checkout_url = session.url
                     session_id = session.id
@@ -1965,7 +2045,9 @@ def create_checkout_session(payload: CreateCheckoutSessionSchema, user: dict = D
                     is_mock_stripe = True
 
             if is_mock_stripe:
-                session_id = f"cs_test_mock_{booking['id']}_{random.randint(10000, 99999)}"
+                stable_key = idempotency_key or f"booking-{booking['id']}"
+                stable_suffix = hashlib.sha256(stable_key.encode("utf-8")).hexdigest()[:12]
+                session_id = f"cs_test_mock_{booking['id']}_{stable_suffix}"
                 checkout_url = f"/static/success.html?session_id={session_id}&booking_id={booking['id']}&mock=true"
 
             # Update booking record with session id
