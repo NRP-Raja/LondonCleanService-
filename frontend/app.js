@@ -25,6 +25,8 @@ let state = {
     activeJobForMap: null,
     managerBookings: [],
     managerQuickFilter: null,
+    managerUnassigned: 0,
+    managerPendingVetting: 0,
     staffJobs: []
 };
 
@@ -404,6 +406,7 @@ async function checkAuthState() {
  * Configures DOM for Unauthenticated Guests
  */
 function applyUnauthenticatedView() {
+    document.body.classList.remove("manager-mode");
     // 1. View Management: Show Landing Page, Hide Private Dashboard
     document.getElementById("landing-view").classList.add("active");
     document.getElementById("dashboard-view").classList.add("hidden");
@@ -437,6 +440,7 @@ function applyAuthenticatedView() {
 
     const user = state.user;
     const role = user.role.toLowerCase();
+    document.body.classList.toggle("manager-mode", role === "manager");
 
     // 1. View Management: Hide Public Landing Page, Reveal Private Dashboard Wrapper
     document.getElementById("landing-view").classList.remove("active");
@@ -486,10 +490,26 @@ function applyAuthenticatedView() {
         loadStaffEarnings();
     } else if (role === "manager") {
         document.getElementById("manager-dashboard-view").classList.add("active");
+        const managerName = document.getElementById("manager-profile-name");
+        if (managerName) managerName.textContent = user.full_name || "Manager";
         loadManagerData();
     }
 
     window.scrollTo({ top: 0, behavior: "smooth" });
+}
+
+function toggleManagerSidebar() {
+    const sidebar = document.getElementById("manager-sidebar");
+    const toggle = document.querySelector(".manager-menu-toggle");
+    if (!sidebar || !toggle) return;
+    const open = sidebar.classList.toggle("open");
+    toggle.setAttribute("aria-expanded", String(open));
+}
+
+function selectManagerSection(link) {
+    document.querySelectorAll(".manager-nav-link").forEach(item => item.classList.toggle("active", item === link));
+    document.getElementById("manager-sidebar")?.classList.remove("open");
+    document.querySelector(".manager-menu-toggle")?.setAttribute("aria-expanded", "false");
 }
 
 // ==========================================================
@@ -1554,6 +1574,23 @@ function openGoogleMaps(postcode) {
 // ==========================================================
 // 9. MANAGER DASHBOARD & DISPATCH
 // ==========================================================
+function updateManagerAttention(unassigned = state.managerUnassigned, pendingVetting = state.managerPendingVetting) {
+    state.managerUnassigned = Number(unassigned) || 0;
+    state.managerPendingVetting = Number(pendingVetting) || 0;
+    const panel = document.getElementById("manager-attention-panel");
+    const summary = document.getElementById("manager-attention-summary");
+    const links = document.getElementById("manager-attention-links");
+    if (!panel || !summary || !links) return;
+    const items = [];
+    if (state.managerUnassigned > 0) items.push(`<a href="#manager-dispatch" onclick="setManagerFilter('UNASSIGNED')">${state.managerUnassigned} unassigned booking${state.managerUnassigned === 1 ? "" : "s"}</a>`);
+    if (state.managerPendingVetting > 0) items.push(`<a href="#manager-vetting">${state.managerPendingVetting} vetting record${state.managerPendingVetting === 1 ? "" : "s"} pending</a>`);
+    panel.classList.toggle("hidden", items.length === 0);
+    if (items.length) {
+        summary.textContent = "Review the operational items below.";
+        links.innerHTML = items.join("");
+    }
+}
+
 async function loadManagerData() {
     if (!state.token) return;
     loadManagerKPIs();
@@ -1564,17 +1601,30 @@ async function loadManagerData() {
 async function loadManagerStaffVetting() {
     const table = document.getElementById("manager-staff-vetting-list");
     if (!table) return;
-    const res = await authFetch(`${API_BASE}/api/manager/staff`);
-    if (!res.ok) return;
-    const data = await res.json();
-    table.innerHTML = (data.staff || []).map(staff => `
-        <tr>
-            <td>${escapeHtml(staff.full_name)}<br><small>${escapeHtml(staff.email)}</small></td>
-            <td><input type="checkbox" id="dbs-${Number(staff.id)}" ${staff.verified_dbs ? "checked" : ""}></td>
-            <td><input type="checkbox" id="rtw-${Number(staff.id)}" ${staff.right_to_work_verified ? "checked" : ""}></td>
-            <td>${escapeHtml(staff.vetting_status || "PENDING")}</td>
-            <td><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${Number(staff.id)}, event.currentTarget)">Save & Activate</button></td>
-        </tr>`).join("");
+    renderTableSkeleton(table, 5);
+    try {
+        const res = await authFetch(`${API_BASE}/api/manager/staff`);
+        if (!res.ok) {
+            renderLoaderError(table, "We couldn't load cleaner vetting records. Please try again.", () => loadManagerStaffVetting(), 5);
+            return;
+        }
+        const data = await res.json();
+        const staff = data.staff || [];
+        state.managerPendingVetting = staff.filter(item => item.vetting_status !== "APPROVED").length;
+        updateManagerAttention();
+        table.innerHTML = staff.length ? staff.map(cleaner => `
+            <tr>
+                <td data-label="Cleaner">${escapeHtml(cleaner.full_name)}<br><small>${escapeHtml(cleaner.email)}</small></td>
+                <td data-label="DBS"><label class="manager-check"><input type="checkbox" id="dbs-${Number(cleaner.id)}" ${cleaner.verified_dbs ? "checked" : ""}> <span>${cleaner.verified_dbs ? "Verified" : "Pending"}</span></label></td>
+                <td data-label="Right to Work"><label class="manager-check"><input type="checkbox" id="rtw-${Number(cleaner.id)}" ${cleaner.right_to_work_verified ? "checked" : ""}> <span>${cleaner.right_to_work_verified ? "Verified" : "Pending"}</span></label></td>
+                <td data-label="Status"><span class="manager-status">${escapeHtml(cleaner.vetting_status || "PENDING")}</span></td>
+                <td data-label="Action"><button class="btn btn-sm btn-primary" onclick="updateStaffVetting(${Number(cleaner.id)}, event.currentTarget)">Save</button></td>
+            </tr>`).join("") : `<tr><td colspan="5" class="manager-empty">No cleaner vetting records found.</td></tr>`;
+    } catch (err) {
+        if (err.message !== "Session expired") {
+            renderLoaderError(table, "We couldn't load cleaner vetting records. Please try again.", () => loadManagerStaffVetting(), 5);
+        }
+    }
 }
 
 async function updateStaffVetting(staffId, button) {
@@ -1613,15 +1663,18 @@ async function loadManagerKPIs() {
         if (!res.ok) return;
         const data = await res.json();
         if (data.kpis) {
-            document.getElementById("kpi-daily-rev").textContent = `£${data.kpis.daily_revenue_gbp.toFixed(2)}`;
-            document.getElementById("kpi-monthly-rev").textContent = `£${data.kpis.total_revenue_gbp.toFixed(2)}`;
-            document.getElementById("kpi-utilization").textContent = `${data.kpis.staff_utilization_pct}%`;
-            document.getElementById("kpi-active-cleaners").textContent = data.kpis.active_cleaners_today;
+            document.getElementById("kpi-daily-rev").textContent = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" }).format(Number(data.kpis.daily_revenue_gbp) || 0);
+            document.getElementById("kpi-active-cleaners").textContent = `${data.kpis.active_cleaners_today} / ${data.kpis.total_cleaners}`;
             document.getElementById("kpi-unassigned-count").textContent = data.kpis.unassigned_jobs;
+            updateManagerAttention(data.kpis.unassigned_jobs);
         }
     } catch (err) {
         if (err.message !== "Session expired") {
             console.error("Manager KPIs error:", err);
+            ["kpi-daily-rev", "kpi-active-cleaners", "kpi-unassigned-count"].forEach(id => {
+                const element = document.getElementById(id);
+                if (element) element.textContent = "Unavailable";
+            });
         }
     }
 }
@@ -1641,6 +1694,9 @@ async function loadManagerBookings() {
         const data = await res.json().catch(() => ({}));
         if (Array.isArray(data.bookings)) {
             const today = new Date().toISOString().slice(0, 10);
+            if (filter === "ALL") {
+                document.getElementById("kpi-bookings-today").textContent = data.bookings.filter(b => b.scheduled_date === today).length;
+            }
             const visibleBookings = state.managerQuickFilter === "UNASSIGNED"
                 ? data.bookings.filter(b => !b.staff_id)
                 : state.managerQuickFilter === "TODAY"
@@ -1749,7 +1805,6 @@ async function loadManagerBookings() {
                 <span class="timeline-hours">08:00&nbsp;&nbsp;&nbsp;&nbsp;12:00&nbsp;&nbsp;&nbsp;&nbsp;16:00&nbsp;&nbsp;&nbsp;&nbsp;20:00</span></div>` +
                 (Object.entries(grouped).map(([name, jobs]) =>
                     `<div class="timeline-row"><strong>${escapeHtml(name)}</strong><div class="timeline-track">
-                        <span class="timeline-buffer-label">45 min TfL buffer after each job</span>
                         ${jobs.map(renderJob).join("")}
                     </div></div>`
                 ).join("") || `<p class="text-muted">No assigned jobs in this view.</p>`);

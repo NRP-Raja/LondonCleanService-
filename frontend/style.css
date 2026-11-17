@@ -1285,11 +1285,280 @@ body {
     font-size: 0.75rem;
 }
 
+}
+
 /* Mobile Responsiveness */
+/* Manager-only application shell */
+    body.manager-mode {
+        background: #f7f9fb;
+    }
+
+    body.manager-mode .demo-bar,
+    body.manager-mode .navbar {
+        display: none;
+    }
+
+    body.manager-mode #dashboard-view {
+        min-height: 100vh;
+    }
+
+    body.manager-mode #manager-dashboard-view {
+        min-height: 100vh;
+    }
+
+    #manager-dashboard-view .manager-shell {
+        display: grid;
+        grid-template-columns: 240px minmax(0, 1fr);
+        min-height: 100vh;
+    }
+
+    #manager-dashboard-view .manager-sidebar {
+        display: flex;
+        flex-direction: column;
+        padding: 28px 18px 20px;
+        border-right: 1px solid var(--border-color);
+        background: #ffffff;
+    }
+
+    #manager-dashboard-view .manager-brand {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin: 0 10px 38px;
+        color: var(--navy);
+        font-size: 1.15rem;
+        font-weight: 700;
+    }
+
+    #manager-dashboard-view .manager-brand img {
+        width: 34px;
+        height: 34px;
+        border: 2px solid var(--primary);
+        border-radius: 50%;
+        object-fit: cover;
+    }
+
+    #manager-dashboard-view .manager-sidebar nav {
+        display: grid;
+        gap: 6px;
+    }
+
+    #manager-dashboard-view .manager-nav-link {
+        display: flex;
+        align-items: center;
+        gap: 12px;
+        padding: 11px 12px;
+        border-radius: var(--radius-sm);
+        color: var(--text-muted);
+        font-size: .82rem;
+        font-weight: 700;
+        text-decoration: none;
+    }
+
+    #manager-dashboard-view .manager-nav-link:hover,
+    #manager-dashboard-view .manager-nav-link:focus-visible,
+    #manager-dashboard-view .manager-nav-link.active {
+        outline: none;
+        background: var(--primary-light);
+        color: var(--primary-dark);
+    }
+
+    #manager-dashboard-view .manager-nav-link i {
+        width: 18px;
+        text-align: center;
+        font-size: .95rem;
+    }
+
+    #manager-dashboard-view .manager-sidebar-footer {
+        display: grid;
+        gap: 10px;
+        margin-top: auto;
+        padding: 18px 10px 0;
+        border-top: 1px solid var(--border-color);
+    }
+
+    #manager-dashboard-view .manager-profile {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        color: var(--navy);
+        font-size: .78rem;
+        font-weight: 700;
+    }
+
+    #manager-dashboard-view .manager-profile i { color: var(--primary-dark); font-size: 1.1rem; }
+    #manager-dashboard-view .manager-signout {
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        padding: 7px 0;
+        border: 0;
+        background: transparent;
+        color: var(--text-muted);
+        cursor: pointer;
+        font: inherit;
+        font-size: .78rem;
+        text-align: left;
+    }
+    #manager-dashboard-view .manager-signout:hover,
+    #manager-dashboard-view .manager-signout:focus-visible { color: var(--primary-dark); outline: none; }
+
+    #manager-dashboard-view .manager-main {
+        width: min(1180px, 100%);
+        margin: 0 auto;
+        padding: 38px clamp(22px, 4vw, 58px) 60px;
+    }
+
+    #manager-dashboard-view .manager-topbar {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        gap: 16px;
+        margin-bottom: 28px;
+    }
+
+    #manager-dashboard-view .manager-topbar h2 {
+        margin: 0;
+        color: var(--navy);
+        font-size: clamp(1.55rem, 3vw, 2rem);
+    }
+
+    #manager-dashboard-view .manager-topbar p:not(.eyebrow) {
+        margin-top: 5px;
+        color: var(--text-muted);
+        font-size: .88rem;
+    }
+
+    #manager-dashboard-view .manager-refresh { justify-self: end; }
+    #manager-dashboard-view .manager-menu-toggle { display: none; }
+
+    #manager-dashboard-view .manager-kpi-grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 14px;
+        margin-bottom: 22px;
+    }
+
+    #manager-dashboard-view .manager-kpi-card {
+        display: flex;
+        gap: 12px;
+        min-height: 112px;
+        padding: 17px;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        background: var(--card-bg);
+        box-shadow: var(--shadow-sm);
+    }
+
+    #manager-dashboard-view .manager-kpi-card > div:last-child { min-width: 0; }
+    #manager-dashboard-view .manager-kpi-card > div:last-child > span { color: var(--text-muted); font-size: .74rem; font-weight: 700; }
+    #manager-dashboard-view .manager-kpi-card strong { display: block; margin-top: 7px; color: var(--navy); font-size: 1.35rem; }
+    #manager-dashboard-view .manager-kpi-card small { display: block; margin-top: 4px; color: #8290a3; font-size: .7rem; }
+    #manager-dashboard-view .manager-kpi-icon { display: grid; flex: 0 0 34px; place-items: center; width: 34px; height: 34px; border-radius: 8px; }
+    #manager-dashboard-view .manager-kpi-icon.amber { background: #fff6dd; color: #a16207; }
+    #manager-dashboard-view .manager-kpi-icon.teal { background: var(--primary-light); color: var(--primary-dark); }
+    #manager-dashboard-view .manager-kpi-icon.slate { background: #eef2f6; color: #475569; }
+    #manager-dashboard-view .manager-kpi-icon.green { background: #eaf8ef; color: #15803d; }
+
+    #manager-dashboard-view .manager-attention-panel {
+        justify-content: space-between;
+        gap: 16px;
+        margin-bottom: 18px;
+        padding: 13px 16px;
+        border: 1px solid #f3d98b;
+        border-radius: var(--radius-md);
+        background: #fffdf5;
+    }
+    #manager-dashboard-view .manager-attention-panel > div { display: flex; align-items: center; gap: 10px; }
+    #manager-dashboard-view .manager-attention-panel > div > i { color: #a16207; }
+    #manager-dashboard-view .manager-attention-panel strong { color: var(--navy); font-size: .82rem; }
+    #manager-dashboard-view .manager-attention-panel p { margin: 2px 0 0; color: var(--text-muted); font-size: .75rem; }
+    #manager-dashboard-view .manager-attention-panel a { color: var(--primary-dark); font-size: .75rem; font-weight: 700; text-decoration: none; }
+
+    #manager-dashboard-view .manager-card {
+        margin-bottom: 18px;
+        overflow: hidden;
+        border: 1px solid var(--border-color);
+        border-radius: var(--radius-md);
+        background: var(--card-bg);
+        box-shadow: var(--shadow-sm);
+    }
+    #manager-dashboard-view .manager-section-heading {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        gap: 16px;
+        padding: 20px 20px 14px;
+    }
+    #manager-dashboard-view .manager-section-heading h3 { margin: 0; color: var(--navy); font-size: 1.05rem; }
+    #manager-dashboard-view .manager-section-heading p:not(.eyebrow) { margin-top: 4px; color: var(--text-muted); font-size: .78rem; }
+    #manager-dashboard-view .manager-result-count { color: var(--text-muted); font-size: .75rem; }
+    #manager-dashboard-view .manager-toolbar { display: flex; justify-content: space-between; gap: 12px; flex-wrap: wrap; padding: 0 20px 14px; }
+    #manager-dashboard-view .manager-filter-controls { display: flex; gap: 8px; }
+    #manager-dashboard-view .manager-search,
+    #manager-dashboard-view .manager-filter-controls select { min-height: 35px; border: 1px solid var(--border-color); border-radius: var(--radius-sm); padding: 7px 9px; background: #fff; }
+    #manager-dashboard-view .manager-search:focus-visible,
+    #manager-dashboard-view .manager-filter-controls select:focus-visible { outline: 3px solid rgba(0,168,107,.2); outline-offset: 1px; }
+    #manager-dashboard-view .filter-pill { padding: 6px 9px; }
+    #manager-dashboard-view .schedule-timeline { margin: 0 20px 16px; }
+    #manager-dashboard-view .manager-bookings-table { min-width: 900px; }
+    #manager-dashboard-view .manager-empty { padding: 24px !important; color: var(--text-muted); text-align: center; }
+    #manager-dashboard-view .manager-status { font-weight: 700; }
+    #manager-dashboard-view .manager-check { display: inline-flex; align-items: center; gap: 7px; }
+
+    @media (max-width: 900px) {
+        body.manager-mode .demo-bar,
+        body.manager-mode .navbar { display: none; }
+        #manager-dashboard-view .manager-shell { display: block; }
+        #manager-dashboard-view .manager-sidebar {
+            position: fixed;
+            z-index: 1100;
+            inset: 0 auto 0 0;
+            width: min(280px, 86vw);
+            transform: translateX(-105%);
+            transition: transform .2s ease;
+            box-shadow: var(--shadow-lg);
+        }
+        #manager-dashboard-view .manager-sidebar.open { transform: translateX(0); }
+        #manager-dashboard-view .manager-menu-toggle {
+            display: inline-grid;
+            grid-column: 1;
+            grid-row: 1;
+            place-items: center;
+            width: 38px;
+            height: 38px;
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            background: #fff;
+            color: var(--navy);
+            cursor: pointer;
+        }
+        #manager-dashboard-view .manager-topbar { grid-template-columns: auto 1fr auto; }
+        #manager-dashboard-view .manager-refresh { grid-column: 3; grid-row: 1; }
+        #manager-dashboard-view .manager-kpi-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+
+    @media (max-width: 560px) {
+        #manager-dashboard-view .manager-main { padding: 22px 14px 40px; }
+        #manager-dashboard-view .manager-kpi-grid { grid-template-columns: 1fr; }
+        #manager-dashboard-view .manager-topbar h2 { font-size: 1.35rem; }
+        #manager-dashboard-view .manager-topbar p:not(.eyebrow) { font-size: .76rem; }
+        #manager-dashboard-view .manager-refresh span { display: none; }
+        #manager-dashboard-view .manager-toolbar,
+        #manager-dashboard-view .manager-filter-controls { width: 100%; }
+        #manager-dashboard-view .manager-search,
+        #manager-dashboard-view .manager-filter-controls select { flex: 1; min-width: 0; }
+        #manager-dashboard-view .manager-section-heading { padding: 16px 14px 12px; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+        #manager-dashboard-view .manager-sidebar { transition: none; }
+    }
 @media (max-width: 900px) {
     .hero, .staff-grid, .footer-container {
         grid-template-columns: 1fr;
     }
+
     .kpi-grid {
         grid-template-columns: 1fr 1fr;
     }
