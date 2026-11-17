@@ -439,7 +439,7 @@ function applyAuthenticatedView() {
     if (!state.user) return;
 
     const user = state.user;
-    const role = user.role.toLowerCase();
+    const role = String(user.role || "").trim().toLowerCase();
     document.body.classList.toggle("manager-mode", role === "manager");
 
     // 1. View Management: Hide Public Landing Page, Reveal Private Dashboard Wrapper
@@ -489,6 +489,7 @@ function applyAuthenticatedView() {
         loadStaffSchedule();
         loadStaffEarnings();
     } else if (role === "manager") {
+        setRoute("dashboard", null, true);
         document.getElementById("manager-dashboard-view").classList.add("active");
         const managerName = document.getElementById("manager-profile-name");
         if (managerName) managerName.textContent = user.full_name || "Manager";
