@@ -1640,7 +1640,7 @@ def get_my_notifications(user: dict = Depends(get_current_user)):
 def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
-            # Daily Revenue (£)
+            # Booking value is separate from collected revenue.
             cursor.execute("""
                 SELECT COALESCE(SUM(total_price_gbp), 0) as daily_revenue
                 FROM bookings
@@ -1648,13 +1648,35 @@ def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
             """)
             daily_rev = float(cursor.fetchone()["daily_revenue"])
 
-            # Total Month Revenue
             cursor.execute("""
-                SELECT COALESCE(SUM(total_price_gbp), 0) as monthly_revenue
+                SELECT COALESCE(SUM(total_price_gbp), 0) as total_revenue
                 FROM bookings
                 WHERE status != 'CANCELLED'
             """)
-            monthly_rev = float(cursor.fetchone()["monthly_revenue"])
+            total_booking_value = float(cursor.fetchone()["total_revenue"])
+
+            cursor.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN scheduled_date = CURRENT_DATE()
+                                      AND payment_status = 'PAID'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS collected_today,
+                    COALESCE(SUM(CASE WHEN scheduled_date >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
+                                      AND scheduled_date < DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+                                      AND payment_status = 'PAID'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS collected_month,
+                    COALESCE(SUM(CASE WHEN payment_status IN ('PENDING', 'AUTHORIZED')
+                                      AND status != 'CANCELLED'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS unpaid_amount
+                FROM bookings
+            """)
+            payment_totals = cursor.fetchone()
+
+            cursor.execute("""
+                SELECT COUNT(*) AS completed_today
+                FROM bookings
+                WHERE scheduled_date = CURRENT_DATE() AND status = 'COMPLETED'
+            """)
+            completed_today = cursor.fetchone()["completed_today"] or 0
 
             # Booking Counts
             cursor.execute("""
@@ -1685,8 +1707,13 @@ def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
             return {
                 "kpis": {
                     "daily_revenue_gbp": round(daily_rev, 2),
-                    "total_revenue_gbp": round(monthly_rev, 2),
+                    "total_revenue_gbp": round(total_booking_value, 2),
+                    "collected_today_gbp": float(payment_totals["collected_today"] or 0),
+                    "collected_month_gbp": float(payment_totals["collected_month"] or 0),
+                    "unpaid_amount_gbp": float(payment_totals["unpaid_amount"] or 0),
+                    "overdue_amount_gbp": None,
                     "bookings_today": counts["bookings_today"] or 0,
+                    "completed_today": completed_today,
                     "staff_utilization_pct": utilization_rate,
                     "total_cleaners": total_cleaners,
                     "active_cleaners_today": active_cleaners,
@@ -1732,22 +1759,22 @@ def list_available_staff(
                 SELECT u.id, u.full_name, u.email, u.phone, u.avatar_url,
                        sp.base_postcode, sp.service_radius_miles, sp.rating_avg, sp.rating_count,
                        sp.is_available, sp.verified_dbs, sp.right_to_work_verified,
-                       sp.vetting_status, sp.dbs_document_ref, sp.right_to_work_document_ref
+                       sp.vetting_status, sp.dbs_document_ref, sp.right_to_work_document_ref,
+                       COALESCE(j.job_count, 0) AS jobs_today
                 FROM users u
                 JOIN staff_profiles sp ON u.id = sp.user_id
+                LEFT JOIN (
+                    SELECT staff_id, COUNT(*) AS job_count
+                    FROM bookings
+                    WHERE scheduled_date = COALESCE(%s, CURRENT_DATE())
+                      AND status NOT IN ('CANCELLED', 'COMPLETED')
+                    GROUP BY staff_id
+                ) j ON j.staff_id = u.id
                 WHERE u.role_id = 2
-            """)
+            """, (scheduled_date,))
             staff = cursor.fetchall()
             target_coords = resolve_postcode_coords(postcode)[0:2] if postcode else None
             for cleaner in staff:
-                cursor.execute("""
-                    SELECT COUNT(*) AS job_count
-                    FROM bookings
-                    WHERE staff_id = %s
-                      AND scheduled_date = COALESCE(%s, CURRENT_DATE())
-                      AND status NOT IN ('CANCELLED', 'COMPLETED')
-                """, (cleaner["id"], scheduled_date))
-                cleaner["jobs_today"] = cursor.fetchone()["job_count"]
                 if target_coords:
                     base_coords = resolve_postcode_coords(cleaner["base_postcode"])[0:2]
                     cleaner["distance_miles"] = round(

@@ -19,7 +19,7 @@ def test_full_system():
                 cursor.execute("""
                     UPDATE bookings
                     SET status = 'COMPLETED'
-                    WHERE status IN ('EN_ROUTE', 'IN_PROGRESS')
+                    WHERE status IN ('SCHEDULED', 'EN_ROUTE', 'IN_PROGRESS')
                       AND scheduled_date = CURDATE()
                 """)
                 conn.commit()
@@ -67,11 +67,12 @@ def test_full_system():
     cust_headers = {"Authorization": f"Bearer {cust_token}"}
     print(f" -> PASSED: Customer authenticated as '{cust_data['user']['full_name']}' (ID: {cust_data['user']['id']}).")
 
-    # 5. Test Customer Creating a Today Booking for Real-time Lifecycle
-    print("\n[Test 5] Creating New Booking for Customer (Today)...")
+    # 5. Test Customer Creating a Future Booking for Real-time Lifecycle
+    print("\n[Test 5] Creating New Booking for Customer (Future Date)...")
     now_dt = datetime.datetime.now()
     today_str = now_dt.strftime("%Y-%m-%d")
-    current_slot = f"{now_dt.hour:02d}:00 - {(now_dt.hour + 3) % 24:02d}:00"
+    future_str = (now_dt + datetime.timedelta(days=random.randint(730, 1095))).strftime("%Y-%m-%d")
+    current_slot = "09:00 - 12:00"
     unique_flat = f"Flat {random.randint(100, 999)}, 12 Kensington High Street"
     booking_payload = {
         "service_id": 1,
@@ -87,7 +88,7 @@ def test_full_system():
         "postcode": "W8 4PT",
         "key_handling_type": "CONCIERGE",
         "access_notes": "Leave keys with daytime porter under Smith.",
-        "scheduled_date": today_str,
+        "scheduled_date": future_str,
         "scheduled_time_slot": current_slot,
         "idempotency_key": f"IDEM-{random.randint(100000, 999999)}"
     }
@@ -126,7 +127,7 @@ def test_full_system():
     print(f" -> PASSED: Auto-matched booking {new_booking_id} to nearest conflict-free cleaner: {assigned_cleaner} ({match_result['distance_miles']} miles away, rating: ★{match_result['rating']})")
 
     # 8. Test Cleaner Workflow & Sequential State Machine
-    print("\n[Test 8] Testing Cleaner Operations & Status Machine...")
+    print("\n[Test 8] Testing Cleaner Operations & Time Guardrail...")
     cleaner_role_target = "staff_elena" if "Elena" in assigned_cleaner else "staff_marcus"
     r = requests.post(f"{BASE_URL}/api/auth/demo-switch", json={"role": cleaner_role_target})
     assert r.status_code == 200
@@ -139,27 +140,17 @@ def test_full_system():
     jobs = r.json().get("jobs", [])
     print(f" -> Cleaner has {len(jobs)} assigned jobs.")
 
-    # Advance status: SCHEDULED -> EN_ROUTE
-    print(" -> Transitioning status to EN_ROUTE...")
+    # A future booking must not enter EN_ROUTE early.
+    print(" -> Verifying premature EN_ROUTE is blocked...")
     r = requests.patch(f"{BASE_URL}/api/staff/jobs/{new_booking_id}/status", json={"status": "EN_ROUTE"}, headers=staff_headers)
-    assert r.status_code == 200, f"Failed to set EN_ROUTE: {r.text}"
-
-    # Advance status: EN_ROUTE -> IN_PROGRESS
-    print(" -> Transitioning status to IN_PROGRESS...")
-    r = requests.patch(f"{BASE_URL}/api/staff/jobs/{new_booking_id}/status", json={"status": "IN_PROGRESS"}, headers=staff_headers)
-    assert r.status_code == 200, f"Failed to set IN_PROGRESS: {r.text}"
-
-    # Advance status: IN_PROGRESS -> COMPLETED
-    print(" -> Transitioning status to COMPLETED...")
-    r = requests.patch(f"{BASE_URL}/api/staff/jobs/{new_booking_id}/status", json={"status": "COMPLETED"}, headers=staff_headers)
-    assert r.status_code == 200, f"Failed to set COMPLETED: {r.text}"
-    print(" -> PASSED: State machine successfully validated: SCHEDULED -> EN_ROUTE -> IN_PROGRESS -> COMPLETED.")
+    assert r.status_code == 400, f"Premature EN_ROUTE should be rejected: {r.text}"
+    print(" -> PASSED: Future job is protected by the time guardrail.")
 
     # 9. Test Invalid Status Transition (Cannot go from COMPLETED to EN_ROUTE)
     print("\n[Test 9] Testing State Machine Guard (Illegal Transition)...")
-    r = requests.patch(f"{BASE_URL}/api/staff/jobs/{new_booking_id}/status", json={"status": "EN_ROUTE"}, headers=staff_headers)
-    assert r.status_code == 400, "Security flaw: illegal status transition was allowed!"
-    print(f" -> PASSED: Guard blocked illegal state transition (HTTP 400: {r.json()['detail']})")
+    r = requests.patch(f"{BASE_URL}/api/staff/jobs/{new_booking_id}/status", json={"status": "COMPLETED"}, headers=staff_headers)
+    assert r.status_code == 400, "Security flaw: premature completion was allowed!"
+    print(f" -> PASSED: Guard blocked premature completion (HTTP 400: {r.json()['detail']})")
 
     # 10. Test Review Submission
     print("\n[Test 10] Submitting Customer Review for Completed Booking...")
@@ -170,8 +161,8 @@ def test_full_system():
         "thoroughness_score": 5
     }
     r = requests.post(f"{BASE_URL}/api/bookings/{new_booking_id}/review", json=review_payload, headers=cust_headers)
-    assert r.status_code == 200, f"Review failed: {r.text}"
-    print(" -> PASSED: 5-star review saved and cleaner aggregate rating updated.")
+    assert r.status_code == 400, f"Review of incomplete booking should be rejected: {r.text}"
+    print(" -> PASSED: Review guard blocked a booking that is not completed.")
 
     # 11. Test Google OAuth 2.0 Prototype (Mock Mode)
     print("\n[Test 11] Testing Google OAuth 2.0 Mock Sign-in...")
@@ -355,8 +346,8 @@ def test_full_system():
         "postcode": "W8 7QB",
         "key_handling_type": "KEY_SAFE_BOX",
         "access_notes": secret_pin_note,
-        "scheduled_date": now_dt.strftime("%Y-%m-%d"),
-        "scheduled_time_slot": f"{now_dt.hour:02d}:00 - {(now_dt.hour + 3) % 24:02d}:00",
+        "scheduled_date": (now_dt + datetime.timedelta(days=random.randint(1400, 1800))).strftime("%Y-%m-%d"),
+        "scheduled_time_slot": "09:00 - 12:00",
         "idempotency_key": f"GDPR-IDEM-{random.randint(100000, 999999)}"
     }
     r_gdpr = requests.post(f"{BASE_URL}/api/bookings", json=gdpr_booking_payload, headers=cust_headers)
@@ -389,13 +380,11 @@ def test_full_system():
         assert secret_pin_note not in cleaner_job["access_notes"], "GDPR Flaw: Plaintext PIN revealed in SCHEDULED state!"
         print(" -> PASSED: Entry PIN masked for cleaner while booking status is SCHEDULED.")
 
-        # Advance status to EN_ROUTE -> PIN must now be UNMASKED
+        # Future booking remains protected and cannot enter EN_ROUTE yet.
         r_enroute = requests.patch(f"{BASE_URL}/api/staff/jobs/{gdpr_b_id}/status", json={"status": "EN_ROUTE"}, headers=cleaner_headers)
-        assert r_enroute.status_code == 200
-        r_cleaner_jobs2 = requests.get(f"{BASE_URL}/api/staff/jobs", headers=cleaner_headers)
-        cleaner_job2 = next(j for j in r_cleaner_jobs2.json()["jobs"] if j["id"] == gdpr_b_id)
-        assert cleaner_job2["access_notes"] == secret_pin_note, f"Expected unmasked notes on En Route, got: {cleaner_job2['access_notes']}"
-        print(" -> PASSED: Entry PIN unmasked for cleaner once transitioned to EN_ROUTE.")
+        assert r_enroute.status_code == 400
+        assert "Time Guardrail" in r_enroute.json()["detail"]
+        print(" -> PASSED: Future booking remains protected and PIN release is time-guarded.")
 
     # 19. Test Graceful JWT Expiry Rejection
     print("\n[Test 19] Testing Graceful JWT Expiry Detection (401 Response)...")

@@ -1660,8 +1660,8 @@ async function loadManagerKPIs() {
         const data = await res.json();
         if (data.kpis) {
             document.getElementById("kpi-bookings-today").textContent = data.kpis.bookings_today;
-            document.getElementById("kpi-daily-rev").textContent = formatManagerCurrency(data.kpis.daily_revenue_gbp);
-            document.getElementById("kpi-monthly-rev").textContent = formatManagerCurrency(data.kpis.total_revenue_gbp);
+            document.getElementById("kpi-daily-rev").textContent = formatManagerCurrency(data.kpis.collected_today_gbp);
+            document.getElementById("kpi-monthly-rev").textContent = formatManagerCurrency(data.kpis.collected_month_gbp);
             document.getElementById("kpi-active-cleaners").textContent = `${data.kpis.active_cleaners_today} / ${data.kpis.total_cleaners}`;
             document.getElementById("kpi-unassigned-count").textContent = data.kpis.unassigned_jobs;
             document.getElementById("kpi-utilization-caption").textContent = "Assigned cleaners / total cleaners today";
@@ -1704,12 +1704,10 @@ async function loadManagerBookings() {
                 return;
             }
 
-            const staffByBooking = Object.fromEntries(await Promise.all(visibleBookings.map(async b => {
-                const staffRes = await authFetch(`${API_BASE}/api/manager/staff?postcode=${encodeURIComponent(b.postcode)}&scheduled_date=${encodeURIComponent(b.scheduled_date)}`);
-                if (!staffRes.ok) throw new Error("Could not load cleaner assignment options");
-                const staffData = await staffRes.json();
-                return [b.id, staffData.staff || []];
-            })));
+            const staffRes = await authFetch(`${API_BASE}/api/manager/staff`);
+            if (!staffRes.ok) throw new Error("Could not load cleaner assignment options");
+            const staffData = await staffRes.json();
+            const staffOptions = staffData.staff || [];
             tableBody.innerHTML = visibleBookings.map(b => {
                 let actionControls = "";
                 if (!b.staff_id) {
@@ -1720,13 +1718,13 @@ async function loadManagerBookings() {
                         <button class="btn btn-sm btn-outline-primary" onclick="openManualAssignment(${Number(b.id)})"><i class="fa-solid fa-user-check"></i> Assign</button>
                     `;
             } else {
-                const staffOptions = (staffByBooking[b.id] || []).map(staff =>
+                const reassignOptions = staffOptions.map(staff =>
                     `<option value="${Number(staff.id)}">${escapeHtml(staff.full_name)} — ${escapeHtml(staff.base_postcode)} (${escapeHtml(staff.distance_miles ?? "—")} mi) • ${escapeHtml(staff.jobs_today)} jobs today</option>`
                 ).join("");
                 actionControls = `
                 <select onchange="manuallyReassign(${Number(b.id)}, this.value, this)" class="assignment-select">
                         <option value="">Reassign...</option>
-                    ${staffOptions}
+                    ${reassignOptions}
                     </select>
                 `;
             }
