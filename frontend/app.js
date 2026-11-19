@@ -254,6 +254,7 @@ function renderLoaderError(container, message, retry, columnCount = null) {
 // 1. INITIALIZATION & AUTH STATE ROUTER
 // ==========================================================
 document.addEventListener("DOMContentLoaded", async () => {
+    initManagerSidebar();
     // Set default booking date to tomorrow
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
@@ -1580,6 +1581,32 @@ function updateManagerAttention(unassigned, pendingVetting, errorMessage = null)
     links.innerHTML = items.join("");
 }
 
+function initManagerSidebar() {
+    const shell = document.querySelector(".manager-shell");
+    const toggle = document.getElementById("manager-sidebar-toggle");
+    if (!shell || !toggle) return;
+
+    toggle.addEventListener("click", () => {
+        const collapsed = shell.classList.toggle("collapsed");
+        toggle.setAttribute("aria-expanded", String(!collapsed));
+        toggle.setAttribute("aria-label", collapsed ? "Expand manager sidebar" : "Collapse manager sidebar");
+        toggle.querySelector("i")?.classList.toggle("fa-angles-right", collapsed);
+        toggle.querySelector("i")?.classList.toggle("fa-angles-left", !collapsed);
+    });
+
+    document.querySelectorAll(".manager-nav-link").forEach(link => {
+        link.addEventListener("click", event => {
+            if (link.getAttribute("aria-disabled") === "true") {
+                event.preventDefault();
+                showToast("This management area is not available yet.", "info");
+                return;
+            }
+            document.querySelectorAll(".manager-nav-link").forEach(item => item.classList.remove("active"));
+            link.classList.add("active");
+        });
+    });
+}
+
 async function loadManagerData() {
     if (!state.token) return;
     const dateNode = document.getElementById("manager-current-date");
@@ -1649,7 +1676,7 @@ async function updateStaffVetting(staffId, button) {
 }
 
 async function loadManagerKPIs() {
-    const values = ["kpi-bookings-today", "kpi-daily-rev", "kpi-monthly-rev", "kpi-active-cleaners", "kpi-unassigned-count"];
+    const values = ["kpi-bookings-today", "kpi-completed-today", "kpi-daily-rev", "kpi-monthly-rev", "kpi-active-cleaners", "kpi-unassigned-count", "kpi-unpaid-amount", "kpi-overdue-amount"];
     try {
         const res = await authFetch(`${API_BASE}/api/manager/dashboard-stats`);
         if (!res.ok) {
@@ -1660,8 +1687,11 @@ async function loadManagerKPIs() {
         const data = await res.json();
         if (data.kpis) {
             document.getElementById("kpi-bookings-today").textContent = data.kpis.bookings_today;
+            document.getElementById("kpi-completed-today").textContent = data.kpis.completed_today;
             document.getElementById("kpi-daily-rev").textContent = formatManagerCurrency(data.kpis.collected_today_gbp);
             document.getElementById("kpi-monthly-rev").textContent = formatManagerCurrency(data.kpis.collected_month_gbp);
+            document.getElementById("kpi-unpaid-amount").textContent = formatManagerCurrency(data.kpis.unpaid_amount_gbp);
+            document.getElementById("kpi-overdue-amount").textContent = data.kpis.overdue_amount_gbp === null ? "Unavailable" : formatManagerCurrency(data.kpis.overdue_amount_gbp);
             document.getElementById("kpi-active-cleaners").textContent = `${data.kpis.active_cleaners_today} / ${data.kpis.total_cleaners}`;
             document.getElementById("kpi-unassigned-count").textContent = data.kpis.unassigned_jobs;
             document.getElementById("kpi-utilization-caption").textContent = "Assigned cleaners / total cleaners today";

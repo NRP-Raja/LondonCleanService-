@@ -369,10 +369,27 @@
             <section id="manager-dashboard-view" class="view-panel">
                 <div class="manager-shell">
                     <aside class="manager-sidebar" aria-label="Manager dashboard sections">
-                        <p class="manager-sidebar-label">Workspace</p>
-                        <a class="manager-nav-link active" href="#manager-overview"><i class="fa-solid fa-grid-2"></i> Overview</a>
-                        <a class="manager-nav-link" href="#manager-dispatch"><i class="fa-solid fa-arrows-to-circle"></i> Bookings &amp; Dispatch</a>
-                        <a class="manager-nav-link" href="#manager-vetting"><i class="fa-solid fa-id-card-clip"></i> Cleaner Vetting</a>
+                        <div class="manager-sidebar-heading">
+                            <p class="manager-sidebar-label">Workspace</p>
+                            <button type="button" class="manager-sidebar-toggle" id="manager-sidebar-toggle" aria-label="Collapse manager sidebar" aria-expanded="true">
+                                <i class="fa-solid fa-angles-left"></i>
+                            </button>
+                        </div>
+                        <nav class="manager-nav" aria-label="Manager workspace navigation">
+                            <a class="manager-nav-link active" href="#manager-overview"><i class="fa-solid fa-grid-2"></i><span>Overview</span></a>
+                            <a class="manager-nav-link" href="#manager-dispatch"><i class="fa-solid fa-calendar-check"></i><span>Bookings</span></a>
+                            <a class="manager-nav-link" href="#manager-dispatch"><i class="fa-solid fa-arrows-to-circle"></i><span>Dispatch &amp; Assignments</span></a>
+                            <a class="manager-nav-link" href="#manager-schedule" aria-disabled="true"><i class="fa-solid fa-clock"></i><span>Staff Schedule</span></a>
+                            <a class="manager-nav-link" href="#manager-vetting"><i class="fa-solid fa-users-gear"></i><span>Cleaners &amp; Staff</span></a>
+                            <a class="manager-nav-link" href="#manager-vetting"><i class="fa-solid fa-id-card-clip"></i><span>Vetting &amp; Compliance</span></a>
+                            <a class="manager-nav-link" href="#manager-finance" aria-disabled="true"><i class="fa-solid fa-sterling-sign"></i><span>Payments &amp; Finance</span></a>
+                            <a class="manager-nav-link" href="#manager-support" aria-disabled="true"><i class="fa-solid fa-headset"></i><span>Customer Support</span></a>
+                            <a class="manager-nav-link" href="#manager-quality" aria-disabled="true"><i class="fa-solid fa-star"></i><span>Reviews &amp; Quality</span></a>
+                            <a class="manager-nav-link" href="#manager-reports" aria-disabled="true"><i class="fa-solid fa-chart-column"></i><span>Reports &amp; Analytics</span></a>
+                            <a class="manager-nav-link" href="#manager-notifications" aria-disabled="true"><i class="fa-solid fa-bell"></i><span>Notifications</span></a>
+                            <a class="manager-nav-link" href="#manager-settings" aria-disabled="true"><i class="fa-solid fa-sliders"></i><span>Business Settings</span></a>
+                            <a class="manager-nav-link" href="#manager-audit" aria-disabled="true"><i class="fa-solid fa-list-check"></i><span>Activity &amp; Audit Log</span></a>
+                        </nav>
                     </aside>
                     <div class="manager-workspace">
                         <header class="manager-header" id="manager-overview">
@@ -391,10 +408,13 @@
 
                         <div class="manager-kpi-grid" aria-live="polite">
                             <div class="manager-kpi-card"><div class="manager-kpi-icon teal"><i class="fa-solid fa-calendar-check"></i></div><div><span class="kpi-title">Bookings today</span><strong class="manager-kpi-value" id="kpi-bookings-today"><span class="loading-skeleton"></span></strong><small>All statuses scheduled today</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon teal"><i class="fa-solid fa-circle-check"></i></div><div><span class="kpi-title">Completed today</span><strong class="manager-kpi-value" id="kpi-completed-today"><span class="loading-skeleton"></span></strong><small>Completed service date today</small></div></div>
                             <div class="manager-kpi-card"><div class="manager-kpi-icon amber"><i class="fa-solid fa-triangle-exclamation"></i></div><div><span class="kpi-title">Unassigned bookings</span><strong class="manager-kpi-value" id="kpi-unassigned-count"><span class="loading-skeleton"></span></strong><small>Scheduled jobs needing a cleaner</small></div></div>
                             <div class="manager-kpi-card"><div class="manager-kpi-icon slate"><i class="fa-solid fa-users-gear"></i></div><div><span class="kpi-title">Cleaners assigned today</span><strong class="manager-kpi-value" id="kpi-active-cleaners"><span class="loading-skeleton"></span></strong><small id="kpi-utilization-caption">Loading cleaner coverage</small></div></div>
                             <div class="manager-kpi-card"><div class="manager-kpi-icon green"><i class="fa-solid fa-sterling-sign"></i></div><div><span class="kpi-title">Collected today</span><strong class="manager-kpi-value" id="kpi-daily-rev"><span class="loading-skeleton"></span></strong><small>Paid, by service date today</small></div></div>
                             <div class="manager-kpi-card"><div class="manager-kpi-icon blue"><i class="fa-solid fa-chart-line"></i></div><div><span class="kpi-title">Collected this month</span><strong class="manager-kpi-value" id="kpi-monthly-rev"><span class="loading-skeleton"></span></strong><small>Paid, by service date</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon amber"><i class="fa-solid fa-file-invoice-dollar"></i></div><div><span class="kpi-title">Unpaid balance</span><strong class="manager-kpi-value" id="kpi-unpaid-amount"><span class="loading-skeleton"></span></strong><small>PENDING or AUTHORIZED, excluding cancelled</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon slate"><i class="fa-solid fa-hourglass-half"></i></div><div><span class="kpi-title">Overdue balance</span><strong class="manager-kpi-value" id="kpi-overdue-amount"><span class="loading-skeleton"></span></strong><small>Unavailable: no due date is stored</small></div></div>
                         </div>
 
                         <div class="manager-attention-panel" id="manager-attention-panel" aria-live="polite">
