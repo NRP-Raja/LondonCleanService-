@@ -191,11 +191,11 @@ def test_full_system():
         "property_type": "2-Bed Flat",
         "bedrooms": 2,
         "bathrooms": 1,
-        "address_line1": "99 Abbey Road",
+        "address_line1": f"{random.randint(100, 999)} Abbey Road",
         "city": "London",
         "postcode": "NW8 9AY",
-        "scheduled_date": (datetime.date.today() + datetime.timedelta(days=3)).strftime("%Y-%m-%d"),
-        "scheduled_time_slot": "10:00 - 13:00"
+        "scheduled_date": (datetime.date.today() + datetime.timedelta(days=random.randint(730, 1095))).strftime("%Y-%m-%d"),
+        "scheduled_time_slot": "09:00 - 12:00"
     }
     r_first = requests.post(f"{BASE_URL}/api/bookings", json=active_dup_payload, headers=cust_headers)
     assert r_first.status_code == 200
@@ -222,7 +222,7 @@ def test_full_system():
         "city": "London",
         "postcode": "W1D 7NE",
         "scheduled_date": active_dup_payload["scheduled_date"],
-        "scheduled_time_slot": "10:00 - 13:00"
+        "scheduled_time_slot": "09:00 - 12:00"
     }
     r_second = requests.post(f"{BASE_URL}/api/bookings", json=conflict_payload, headers=cust_headers)
     assert r_second.status_code == 200

@@ -1112,7 +1112,18 @@ def create_booking(
                 eco_products=payload.eco_cleaning_products
             ))
 
-            reference_code = f"CL-2026-{random.randint(1000, 9999)}"
+            reference_code = None
+            for _ in range(10):
+                candidate = f"CL-{datetime.datetime.now().year}-{random.randint(100000, 999999)}"
+                cursor.execute("SELECT id FROM bookings WHERE reference_code = %s", (candidate,))
+                if not cursor.fetchone():
+                    reference_code = candidate
+                    break
+            if reference_code is None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Could not generate a unique booking reference. Please retry.",
+                )
 
             # UK GDPR Sensitive Physical Access Data Encryption at Rest (AES-256)
             encrypted_access_notes = encrypt_sensitive_data(payload.access_notes)
