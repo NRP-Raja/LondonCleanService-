@@ -84,6 +84,9 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     body TEXT NOT NULL,
     status ENUM('QUEUED', 'SENT', 'FAILED') NOT NULL DEFAULT 'QUEUED',
     error_message VARCHAR(500) NULL,
+    is_read BOOLEAN NOT NULL DEFAULT FALSE,
+    priority ENUM('LOW','NORMAL','HIGH','CRITICAL') NOT NULL DEFAULT 'NORMAL',
+    deep_link VARCHAR(255) NULL,
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     sent_at TIMESTAMP NULL,
     CONSTRAINT fk_notification_user FOREIGN KEY (recipient_user_id) REFERENCES users (id) ON DELETE SET NULL,
@@ -176,6 +179,104 @@ CREATE TABLE IF NOT EXISTS booking_status_logs (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     CONSTRAINT fk_log_booking FOREIGN KEY (booking_id) REFERENCES bookings (id) ON DELETE CASCADE,
     CONSTRAINT fk_log_user FOREIGN KEY (changed_by_user_id) REFERENCES users (id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS payment_records (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    booking_id INT NOT NULL,
+    amount_gbp DECIMAL(8,2) NOT NULL,
+    method ENUM('CASH','CARD','BANK_TRANSFER','REFUND','OTHER') NOT NULL,
+    status ENUM('RECORDED','VERIFIED','REFUND_REQUESTED','REFUNDED','REJECTED') NOT NULL DEFAULT 'RECORDED',
+    reference VARCHAR(100) NULL,
+    recorded_by INT NOT NULL,
+    verified_by INT NULL,
+    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    verified_at TIMESTAMP NULL,
+    CONSTRAINT fk_payment_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_payment_recorded_by FOREIGN KEY (recorded_by) REFERENCES users(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_payment_verified_by FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE RESTRICT,
+    INDEX idx_payment_booking (booking_id, recorded_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS support_cases (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    booking_id INT NULL,
+    customer_id INT NOT NULL,
+    assigned_to INT NULL,
+    subject VARCHAR(160) NOT NULL,
+    description TEXT NOT NULL,
+    status ENUM('OPEN','IN_PROGRESS','RESOLVED') NOT NULL DEFAULT 'OPEN',
+    outcome TEXT NULL,
+    follow_up_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_support_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE SET NULL,
+    CONSTRAINT fk_support_customer FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
+    CONSTRAINT fk_support_assignee FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS activity_audit_log (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    actor_id INT NULL,
+    actor_role VARCHAR(30) NULL,
+    action VARCHAR(80) NOT NULL,
+    entity_type VARCHAR(80) NOT NULL,
+    entity_id VARCHAR(100) NULL,
+    before_json JSON NULL,
+    after_json JSON NULL,
+    reason VARCHAR(500) NULL,
+    request_id VARCHAR(100) NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_audit_entity (entity_type, entity_id),
+    INDEX idx_audit_actor (actor_id, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS staff_shifts (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    staff_id INT NOT NULL,
+    shift_date DATE NOT NULL,
+    start_time TIME NOT NULL,
+    end_time TIME NOT NULL,
+    status ENUM('PLANNED','CONFIRMED','CANCELLED') NOT NULL DEFAULT 'PLANNED',
+    created_by INT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    UNIQUE KEY uq_staff_shift_slot (staff_id, shift_date, start_time, end_time),
+    CONSTRAINT fk_shift_staff FOREIGN KEY (staff_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_shift_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS staff_time_off (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    staff_id INT NOT NULL,
+    start_date DATE NOT NULL,
+    end_date DATE NOT NULL,
+    reason VARCHAR(255) NULL,
+    status ENUM('PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+    reviewed_by INT NULL,
+    reviewed_at TIMESTAMP NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_timeoff_staff FOREIGN KEY (staff_id) REFERENCES users(id) ON DELETE CASCADE,
+    CONSTRAINT fk_timeoff_reviewer FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS business_settings (
+    setting_key VARCHAR(100) PRIMARY KEY,
+    setting_value JSON NOT NULL,
+    updated_by INT NULL,
+    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    CONSTRAINT fk_settings_updater FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+CREATE TABLE IF NOT EXISTS expenses (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    expense_date DATE NOT NULL,
+    category VARCHAR(80) NOT NULL,
+    amount_gbp DECIMAL(10,2) NOT NULL,
+    description VARCHAR(255) NULL,
+    recorded_by INT NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    CONSTRAINT fk_expense_recorded_by FOREIGN KEY (recorded_by) REFERENCES users(id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
 

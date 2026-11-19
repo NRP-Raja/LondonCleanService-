@@ -367,110 +367,98 @@
 
             <!-- Subview 2C: Manager (Admin) Dashboard -->
             <section id="manager-dashboard-view" class="view-panel">
-                <div class="dashboard-header">
-                    <div>
-                        <h2>CleanLondon Executive Operations</h2>
-                        <p>Real-time London dispatch, cleaner utilization, and revenue performance</p>
-                    </div>
-                    <div class="header-actions">
-                        <button class="btn btn-outline" onclick="loadManagerData()"><i class="fa-solid fa-rotate"></i> Refresh</button>
-                    </div>
-                </div>
-
-                <!-- KPI Summary Cards -->
-                <div class="kpi-grid">
-                    <div class="kpi-card">
-                        <div class="kpi-icon emerald"><i class="fa-solid fa-sterling-sign"></i></div>
-                        <div class="kpi-details">
-                            <span class="kpi-title">Daily Revenue (Today)</span>
-                            <h3 class="kpi-value" id="kpi-daily-rev">£88.00</h3>
-                            <span class="kpi-trend positive"><i class="fa-solid fa-arrow-up"></i> Live tracking</span>
+                <div class="manager-shell">
+                    <aside class="manager-sidebar" aria-label="Manager dashboard sections">
+                        <div class="manager-sidebar-heading">
+                            <p class="manager-sidebar-label">Workspace</p>
+                            <button type="button" class="manager-sidebar-toggle" id="manager-sidebar-toggle" aria-label="Collapse manager sidebar" aria-expanded="true">
+                                <i class="fa-solid fa-angles-left"></i>
+                            </button>
                         </div>
-                    </div>
-
-                    <div class="kpi-card">
-                        <div class="kpi-icon indigo"><i class="fa-solid fa-calendar-days"></i></div>
-                        <div class="kpi-details">
-                            <span class="kpi-title">Gross Platform Revenue</span>
-                            <h3 class="kpi-value" id="kpi-monthly-rev">£336.50</h3>
-                            <span class="kpi-trend">All active bookings</span>
-                        </div>
-                    </div>
-
-                    <div class="kpi-card">
-                        <div class="kpi-icon amber"><i class="fa-solid fa-users-gear"></i></div>
-                        <div class="kpi-details">
-                            <span class="kpi-title">Staff Utilization</span>
-                            <h3 class="kpi-value" id="kpi-utilization">50.0%</h3>
-                            <span class="kpi-trend"><span id="kpi-active-cleaners">1</span> of 2 Cleaners Active</span>
-                        </div>
-                    </div>
-
-                    <div class="kpi-card">
-                        <div class="kpi-icon rose"><i class="fa-solid fa-triangle-exclamation"></i></div>
-                        <div class="kpi-details">
-                            <span class="kpi-title">Unassigned Bookings</span>
-                            <h3 class="kpi-value" id="kpi-unassigned-count">0</h3>
-                            <span class="kpi-trend">Requires Dispatch</span>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- Dispatch Operations Table -->
-                <div class="bookings-table-card">
-                    <div class="card-header space-between">
-                        <h3><i class="fa-solid fa-truck-fast"></i> Dispatch Console & Job Allocation</h3>
-                        <div class="filter-group">
-                            <div class="manager-filter-pills">
-                                <button class="filter-pill urgent active" data-filter="UNASSIGNED" onclick="setManagerFilter('UNASSIGNED')">Unassigned ⚠️</button>
-                                <button class="filter-pill" data-filter="TODAY" onclick="setManagerFilter('TODAY')">Active Today</button>
-                                <button class="filter-pill" data-filter="SCHEDULED" onclick="setManagerFilter('SCHEDULED')">Scheduled</button>
-                                <button class="filter-pill" data-filter="COMPLETED" onclick="setManagerFilter('COMPLETED')">Completed</button>
+                        <nav class="manager-nav" aria-label="Manager workspace navigation">
+                            <a class="manager-nav-link active" href="#manager-overview"><i class="fa-solid fa-grid-2"></i><span>Overview</span></a>
+                            <a class="manager-nav-link" href="#manager-dispatch"><i class="fa-solid fa-calendar-check"></i><span>Bookings</span></a>
+                            <a class="manager-nav-link" href="#manager-dispatch"><i class="fa-solid fa-arrows-to-circle"></i><span>Dispatch &amp; Assignments</span></a>
+                            <a class="manager-nav-link" href="#manager-schedule" aria-disabled="true"><i class="fa-solid fa-clock"></i><span>Staff Schedule</span></a>
+                            <a class="manager-nav-link" href="#manager-vetting"><i class="fa-solid fa-users-gear"></i><span>Cleaners &amp; Staff</span></a>
+                            <a class="manager-nav-link" href="#manager-vetting"><i class="fa-solid fa-id-card-clip"></i><span>Vetting &amp; Compliance</span></a>
+                            <a class="manager-nav-link" href="#manager-finance" aria-disabled="true"><i class="fa-solid fa-sterling-sign"></i><span>Payments &amp; Finance</span></a>
+                            <a class="manager-nav-link" href="#manager-support" aria-disabled="true"><i class="fa-solid fa-headset"></i><span>Customer Support</span></a>
+                            <a class="manager-nav-link" href="#manager-quality" aria-disabled="true"><i class="fa-solid fa-star"></i><span>Reviews &amp; Quality</span></a>
+                            <a class="manager-nav-link" href="#manager-reports" aria-disabled="true"><i class="fa-solid fa-chart-column"></i><span>Reports &amp; Analytics</span></a>
+                            <a class="manager-nav-link" href="#manager-notifications" aria-disabled="true"><i class="fa-solid fa-bell"></i><span>Notifications</span></a>
+                            <a class="manager-nav-link" href="#manager-settings" aria-disabled="true"><i class="fa-solid fa-sliders"></i><span>Business Settings</span></a>
+                            <a class="manager-nav-link" href="#manager-audit" aria-disabled="true"><i class="fa-solid fa-list-check"></i><span>Activity &amp; Audit Log</span></a>
+                        </nav>
+                    </aside>
+                    <div class="manager-workspace">
+                        <header class="manager-header" id="manager-overview">
+                            <div>
+                                <p class="eyebrow">Operations workspace</p>
+                                <h2>Operations Overview</h2>
+                                <p>Manage bookings, cleaner assignments and daily operations</p>
                             </div>
-                            <input id="manager-booking-search" class="manager-search" type="search" placeholder="Search postcode or reference" oninput="filterManagerBookings()">
-                            <label>Filter Status:</label>
-                            <select id="manager-status-filter" onchange="loadManagerData()">
-                                <option value="ALL">All Statuses</option>
-                                <option value="SCHEDULED">Scheduled</option>
-                                <option value="EN_ROUTE">En Route</option>
-                                <option value="IN_PROGRESS">In Progress</option>
-                                <option value="COMPLETED">Completed</option>
-                            </select>
+                            <div class="manager-header-actions">
+                                <span class="manager-date" id="manager-current-date"></span>
+                                <button class="btn btn-outline" onclick="loadManagerData()" aria-label="Refresh manager dashboard">
+                                    <i class="fa-solid fa-rotate"></i> Refresh
+                                </button>
+                            </div>
+                        </header>
+
+                        <div class="manager-kpi-grid" aria-live="polite">
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon teal"><i class="fa-solid fa-calendar-check"></i></div><div><span class="kpi-title">Bookings today</span><strong class="manager-kpi-value" id="kpi-bookings-today"><span class="loading-skeleton"></span></strong><small>All statuses scheduled today</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon teal"><i class="fa-solid fa-circle-check"></i></div><div><span class="kpi-title">Completed today</span><strong class="manager-kpi-value" id="kpi-completed-today"><span class="loading-skeleton"></span></strong><small>Completed service date today</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon amber"><i class="fa-solid fa-triangle-exclamation"></i></div><div><span class="kpi-title">Unassigned bookings</span><strong class="manager-kpi-value" id="kpi-unassigned-count"><span class="loading-skeleton"></span></strong><small>Scheduled jobs needing a cleaner</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon slate"><i class="fa-solid fa-users-gear"></i></div><div><span class="kpi-title">Cleaners assigned today</span><strong class="manager-kpi-value" id="kpi-active-cleaners"><span class="loading-skeleton"></span></strong><small id="kpi-utilization-caption">Loading cleaner coverage</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon green"><i class="fa-solid fa-sterling-sign"></i></div><div><span class="kpi-title">Collected today</span><strong class="manager-kpi-value" id="kpi-daily-rev"><span class="loading-skeleton"></span></strong><small>Paid, by service date today</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon blue"><i class="fa-solid fa-chart-line"></i></div><div><span class="kpi-title">Collected this month</span><strong class="manager-kpi-value" id="kpi-monthly-rev"><span class="loading-skeleton"></span></strong><small>Paid, by service date</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon amber"><i class="fa-solid fa-file-invoice-dollar"></i></div><div><span class="kpi-title">Unpaid balance</span><strong class="manager-kpi-value" id="kpi-unpaid-amount"><span class="loading-skeleton"></span></strong><small>PENDING or AUTHORIZED, excluding cancelled</small></div></div>
+                            <div class="manager-kpi-card"><div class="manager-kpi-icon slate"><i class="fa-solid fa-hourglass-half"></i></div><div><span class="kpi-title">Overdue balance</span><strong class="manager-kpi-value" id="kpi-overdue-amount"><span class="loading-skeleton"></span></strong><small>Unavailable: no due date is stored</small></div></div>
                         </div>
-                    </div>
-                    <div id="manager-schedule-timeline" class="schedule-timeline"></div>
 
-                    <div class="table-responsive">
-                        <table class="data-table">
-                            <thead>
-                                <tr>
-                                    <th>Ref #</th>
-                                    <th>Customer</th>
-                                    <th>Postcode</th>
-                                    <th>Service</th>
-                                    <th>Date & Slot</th>
-                                    <th>Value</th>
-                                    <th>Status</th>
-                                    <th>Assigned Cleaner</th>
-                                    <th>Action</th>
-                                </tr>
-                            </thead>
-                            <tbody id="manager-bookings-list">
-                                <!-- Populated dynamically by app.js -->
-                            </tbody>
-                        </table>
-                    </div>
-                </div>
+                        <div class="manager-attention-panel" id="manager-attention-panel" aria-live="polite">
+                            <div><span class="manager-attention-icon"><i class="fa-solid fa-bell"></i></span><div><h3>Needs your attention</h3><p id="manager-attention-summary">Checking today’s operational priorities…</p></div></div>
+                            <div class="manager-attention-links" id="manager-attention-links"></div>
+                        </div>
 
-                <div class="bookings-table-card" style="margin-top:20px;">
-                    <div class="card-header">
-                        <h3><i class="fa-solid fa-id-card-clip"></i> Cleaner Vetting & Activation</h3>
-                    </div>
-                    <div class="table-responsive">
-                        <table class="data-table">
-                            <thead><tr><th>Cleaner</th><th>DBS</th><th>Right to Work</th><th>Status</th><th>Action</th></tr></thead>
-                            <tbody id="manager-staff-vetting-list"></tbody>
-                        </table>
+                        <section class="manager-card" id="manager-dispatch">
+                            <div class="manager-section-header">
+                                <div><p class="eyebrow">Operational queue</p><h3>Bookings &amp; Dispatch</h3><p>Assign eligible cleaners and monitor booking progress.</p></div>
+                                <span class="manager-result-count" id="manager-booking-count" aria-live="polite"></span>
+                            </div>
+                            <div class="manager-toolbar">
+                                <div class="manager-filter-pills" aria-label="Booking quick filters">
+                                    <button class="filter-pill urgent active" data-filter="UNASSIGNED" onclick="setManagerFilter('UNASSIGNED')">Unassigned</button>
+                                    <button class="filter-pill" data-filter="TODAY" onclick="setManagerFilter('TODAY')">Today</button>
+                                    <button class="filter-pill" data-filter="SCHEDULED" onclick="setManagerFilter('SCHEDULED')">Scheduled</button>
+                                    <button class="filter-pill" data-filter="COMPLETED" onclick="setManagerFilter('COMPLETED')">Completed</button>
+                                </div>
+                                <div class="manager-filter-controls">
+                                    <label class="sr-only" for="manager-booking-search">Search bookings</label>
+                                    <input id="manager-booking-search" class="manager-search" type="search" placeholder="Search reference, customer or postcode" oninput="filterManagerBookings()">
+                                    <label class="sr-only" for="manager-status-filter">Filter by status</label>
+                                    <select id="manager-status-filter" onchange="loadManagerData()">
+                                        <option value="ALL">All statuses</option><option value="SCHEDULED">Scheduled</option><option value="EN_ROUTE">En route</option><option value="IN_PROGRESS">In progress</option><option value="COMPLETED">Completed</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <div class="schedule-timeline" id="manager-schedule-timeline"></div>
+                            <div class="table-responsive">
+                                <table class="data-table manager-bookings-table">
+                                    <caption class="sr-only">Manager booking dispatch queue</caption>
+                                    <thead><tr><th>Booking</th><th>Customer</th><th>Location</th><th>Service</th><th>Schedule</th><th>Value</th><th>Payment</th><th>Status</th><th>Cleaner</th><th>Actions</th></tr></thead>
+                                    <tbody id="manager-bookings-list"></tbody>
+                                </table>
+                            </div>
+                        </section>
+
+                        <section class="manager-card" id="manager-vetting">
+                            <div class="manager-section-header"><div><p class="eyebrow">People &amp; compliance</p><h3>Cleaner Vetting</h3><p>Approval activates a cleaner only when both checks are verified.</p></div></div>
+                            <div class="table-responsive">
+                                <table class="data-table"><caption class="sr-only">Cleaner vetting records</caption><thead><tr><th>Cleaner</th><th>DBS verification</th><th>Right to work</th><th>Vetting status</th><th>Action</th></tr></thead><tbody id="manager-staff-vetting-list"></tbody></table>
+                            </div>
+                        </section>
                     </div>
                 </div>
             </section>

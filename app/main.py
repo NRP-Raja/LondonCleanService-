@@ -349,6 +349,26 @@ def queue_notification(cursor, recipient_user_id: Optional[int], recipient_addre
         )
 
 
+def log_activity(cursor, user: dict, action: str, entity_type: str, entity_id: object,
+                 before: object = None, after: object = None, reason: Optional[str] = None,
+                 request_id: Optional[str] = None) -> None:
+    cursor.execute("""
+        INSERT INTO activity_audit_log
+            (actor_id, actor_role, action, entity_type, entity_id, before_json, after_json, reason, request_id)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+    """, (
+        user.get("id"),
+        user.get("role"),
+        action,
+        entity_type,
+        str(entity_id) if entity_id is not None else None,
+        json.dumps(before, default=str) if before is not None else None,
+        json.dumps(after, default=str) if after is not None else None,
+        reason,
+        request_id,
+    ))
+
+
 # ==========================================================
 # SECURITY & AUTH UTILITIES
 # ==========================================================
@@ -483,6 +503,33 @@ class VettingSchema(BaseModel):
 
 class CreateCheckoutSessionSchema(BaseModel):
     booking_id: int
+
+class PaymentRecordSchema(BaseModel):
+    booking_id: int
+    amount_gbp: float = Field(..., gt=0)
+    method: str = Field(..., pattern="^(CASH|CARD|BANK_TRANSFER|REFUND|OTHER)$")
+    reference: Optional[str] = None
+
+class SupportCaseSchema(BaseModel):
+    booking_id: Optional[int] = None
+    customer_id: int
+    subject: str = Field(..., min_length=3, max_length=160)
+    description: str = Field(..., min_length=3, max_length=5000)
+
+class SupportCaseUpdateSchema(BaseModel):
+    status: str = Field(..., pattern="^(OPEN|IN_PROGRESS|RESOLVED)$")
+    assigned_to: Optional[int] = None
+    outcome: Optional[str] = None
+    follow_up_at: Optional[str] = None
+
+class StaffShiftSchema(BaseModel):
+    staff_id: int
+    shift_date: str
+    start_time: str
+    end_time: str
+
+class TimeOffReviewSchema(BaseModel):
+    status: str = Field(..., pattern="^(APPROVED|REJECTED)$")
 
 # ==========================================================
 # FASTAPI APPLICATION SETUP
@@ -1425,6 +1472,11 @@ def update_job_status(booking_id: int, payload: StatusUpdateSchema, user: dict =
     SCHEDULED -> EN_ROUTE -> IN_PROGRESS -> COMPLETED
     """
     valid_transitions = {
+        "PENDING": ["APPROVED", "REJECTED", "CANCELLED"],
+        "APPROVED": ["CONFIRMED", "REJECTED", "CANCELLED"],
+        "CONFIRMED": ["EN_ROUTE", "CANCELLED"],
+        "REJECTED": [],
+        "CANCELLED": [],
         "SCHEDULED": ["EN_ROUTE", "CANCELLED"],
         "EN_ROUTE": ["IN_PROGRESS", "CANCELLED"],
         "IN_PROGRESS": ["COMPLETED"],
@@ -1640,7 +1692,7 @@ def get_my_notifications(user: dict = Depends(get_current_user)):
 def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
-            # Daily Revenue (£)
+            # Booking value is separate from collected revenue.
             cursor.execute("""
                 SELECT COALESCE(SUM(total_price_gbp), 0) as daily_revenue
                 FROM bookings
@@ -1648,18 +1700,41 @@ def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
             """)
             daily_rev = float(cursor.fetchone()["daily_revenue"])
 
-            # Total Month Revenue
             cursor.execute("""
-                SELECT COALESCE(SUM(total_price_gbp), 0) as monthly_revenue
+                SELECT COALESCE(SUM(total_price_gbp), 0) as total_revenue
                 FROM bookings
                 WHERE status != 'CANCELLED'
             """)
-            monthly_rev = float(cursor.fetchone()["monthly_revenue"])
+            total_booking_value = float(cursor.fetchone()["total_revenue"])
+
+            cursor.execute("""
+                SELECT
+                    COALESCE(SUM(CASE WHEN scheduled_date = CURRENT_DATE()
+                                      AND payment_status = 'PAID'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS collected_today,
+                    COALESCE(SUM(CASE WHEN scheduled_date >= DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01')
+                                      AND scheduled_date < DATE_ADD(DATE_FORMAT(CURRENT_DATE(), '%Y-%m-01'), INTERVAL 1 MONTH)
+                                      AND payment_status = 'PAID'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS collected_month,
+                    COALESCE(SUM(CASE WHEN payment_status IN ('PENDING', 'AUTHORIZED')
+                                      AND status != 'CANCELLED'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS unpaid_amount
+                FROM bookings
+            """)
+            payment_totals = cursor.fetchone()
+
+            cursor.execute("""
+                SELECT COUNT(*) AS completed_today
+                FROM bookings
+                WHERE scheduled_date = CURRENT_DATE() AND status = 'COMPLETED'
+            """)
+            completed_today = cursor.fetchone()["completed_today"] or 0
 
             # Booking Counts
             cursor.execute("""
                 SELECT 
                     COUNT(*) as total_bookings,
+                    SUM(CASE WHEN scheduled_date = CURRENT_DATE() THEN 1 ELSE 0 END) as bookings_today,
                     SUM(CASE WHEN status = 'SCHEDULED' THEN 1 ELSE 0 END) as scheduled_count,
                     SUM(CASE WHEN status = 'EN_ROUTE' THEN 1 ELSE 0 END) as en_route_count,
                     SUM(CASE WHEN status = 'IN_PROGRESS' THEN 1 ELSE 0 END) as in_progress_count,
@@ -1684,13 +1759,278 @@ def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
             return {
                 "kpis": {
                     "daily_revenue_gbp": round(daily_rev, 2),
-                    "total_revenue_gbp": round(monthly_rev, 2),
+                    "total_revenue_gbp": round(total_booking_value, 2),
+                    "collected_today_gbp": float(payment_totals["collected_today"] or 0),
+                    "collected_month_gbp": float(payment_totals["collected_month"] or 0),
+                    "unpaid_amount_gbp": float(payment_totals["unpaid_amount"] or 0),
+                    "overdue_amount_gbp": None,
+                    "bookings_today": counts["bookings_today"] or 0,
+                    "completed_today": completed_today,
                     "staff_utilization_pct": utilization_rate,
                     "total_cleaners": total_cleaners,
                     "active_cleaners_today": active_cleaners,
                     "unassigned_jobs": counts["unassigned_count"]
                 },
                 "status_breakdown": counts
+            }
+
+@app.get("/api/manager/payments", tags=["Manager"])
+def list_payment_records(user: dict = Depends(require_role(["manager"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT p.*, b.reference_code
+                FROM payment_records p
+                JOIN bookings b ON b.id = p.booking_id
+                ORDER BY p.recorded_at DESC
+            """)
+            return {"payments": cursor.fetchall()}
+
+@app.post("/api/manager/payments", tags=["Manager"])
+def record_payment(payload: PaymentRecordSchema, user: dict = Depends(require_role(["manager"]))):
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM bookings WHERE id = %s FOR UPDATE", (payload.booking_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Booking not found")
+            cursor.execute("""
+                INSERT INTO payment_records
+                    (booking_id, amount_gbp, method, status, reference, recorded_by)
+                VALUES (%s, %s, %s, 'RECORDED', %s, %s)
+            """, (payload.booking_id, payload.amount_gbp, payload.method, payload.reference, user["id"]))
+            record_id = cursor.lastrowid
+            log_activity(cursor, user, "payment_recorded", "payment", record_id,
+                         after={"booking_id": payload.booking_id, "amount_gbp": payload.amount_gbp,
+                               "method": payload.method})
+            return {"message": "Payment recorded", "payment_id": record_id}
+
+@app.patch("/api/manager/payments/{payment_id}/verify", tags=["Manager"])
+def verify_payment(payment_id: int, user: dict = Depends(require_role(["manager"]))):
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM payment_records WHERE id = %s FOR UPDATE", (payment_id,))
+            payment = cursor.fetchone()
+            if not payment:
+                raise HTTPException(status_code=404, detail="Payment not found")
+            cursor.execute("""
+                UPDATE payment_records
+                SET status = 'VERIFIED', verified_by = %s, verified_at = NOW()
+                WHERE id = %s
+            """, (user["id"], payment_id))
+            log_activity(cursor, user, "payment_verified", "payment", payment_id,
+                         before=payment, after={"status": "VERIFIED"})
+            return {"message": "Payment verified", "payment_id": payment_id}
+
+@app.get("/api/manager/support", tags=["Manager"])
+def list_support_cases(user: dict = Depends(require_role(["manager"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT sc.*, c.full_name AS customer_name, cl.full_name AS assigned_name
+                FROM support_cases sc
+                JOIN users c ON c.id = sc.customer_id
+                LEFT JOIN users cl ON cl.id = sc.assigned_to
+                ORDER BY sc.created_at DESC
+            """)
+            return {"cases": cursor.fetchall()}
+
+@app.post("/api/manager/support", tags=["Manager"])
+def create_support_case(payload: SupportCaseSchema, user: dict = Depends(require_role(["manager"]))):
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO support_cases (booking_id, customer_id, subject, description)
+                VALUES (%s, %s, %s, %s)
+            """, (payload.booking_id, payload.customer_id, payload.subject, payload.description))
+            case_id = cursor.lastrowid
+            log_activity(cursor, user, "support_case_created", "support_case", case_id,
+                         after={"customer_id": payload.customer_id, "subject": payload.subject})
+            return {"message": "Support case created", "case_id": case_id}
+
+@app.patch("/api/manager/support/{case_id}", tags=["Manager"])
+def update_support_case(case_id: int, payload: SupportCaseUpdateSchema,
+                        user: dict = Depends(require_role(["manager"]))):
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM support_cases WHERE id = %s FOR UPDATE", (case_id,))
+            before = cursor.fetchone()
+            if not before:
+                raise HTTPException(status_code=404, detail="Support case not found")
+            cursor.execute("""
+                UPDATE support_cases
+                SET status = %s, assigned_to = %s, outcome = %s,
+                    follow_up_at = %s
+                WHERE id = %s
+            """, (payload.status, payload.assigned_to, payload.outcome,
+                  payload.follow_up_at, case_id))
+            log_activity(cursor, user, "support_case_updated", "support_case", case_id,
+                         before=before, after={"status": payload.status,
+                                               "assigned_to": payload.assigned_to,
+                                               "outcome": payload.outcome})
+            return {"message": "Support case updated", "case_id": case_id}
+
+@app.get("/api/manager/notifications", tags=["Manager"])
+def list_manager_notifications(user: dict = Depends(require_role(["manager"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT id, subject, body, status, is_read, priority, deep_link, created_at
+                FROM notification_outbox
+                WHERE recipient_user_id = %s OR recipient_user_id IS NULL
+                ORDER BY created_at DESC LIMIT 100
+            """, (user["id"],))
+            notifications = cursor.fetchall()
+            unread = sum(1 for item in notifications if not item["is_read"])
+            return {"notifications": notifications, "unread_count": unread}
+
+@app.patch("/api/manager/notifications/{notification_id}/read", tags=["Manager"])
+def mark_notification_read(notification_id: int, user: dict = Depends(require_role(["manager"]))):
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                UPDATE notification_outbox SET is_read = TRUE
+                WHERE id = %s AND (recipient_user_id = %s OR recipient_user_id IS NULL)
+            """, (notification_id, user["id"]))
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Notification not found")
+            log_activity(cursor, user, "notification_read", "notification", notification_id)
+            return {"message": "Notification marked as read"}
+
+@app.get("/api/manager/audit", tags=["Manager"])
+def list_audit_log(user: dict = Depends(require_role(["manager"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT * FROM activity_audit_log
+                ORDER BY created_at DESC LIMIT 200
+            """)
+            return {"audit": cursor.fetchall()}
+
+@app.get("/api/manager/shifts", tags=["Manager"])
+def list_shifts(user: dict = Depends(require_role(["manager"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT ss.*, u.full_name AS staff_name
+                FROM staff_shifts ss
+                JOIN users u ON u.id = ss.staff_id
+                ORDER BY ss.shift_date, ss.start_time
+            """)
+            return {"shifts": cursor.fetchall()}
+
+@app.post("/api/manager/shifts", tags=["Manager"])
+def create_shift(payload: StaffShiftSchema, user: dict = Depends(require_role(["manager"]))):
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO staff_shifts
+                    (staff_id, shift_date, start_time, end_time, created_by)
+                VALUES (%s, %s, %s, %s, %s)
+            """, (payload.staff_id, payload.shift_date, payload.start_time,
+                  payload.end_time, user["id"]))
+            shift_id = cursor.lastrowid
+            log_activity(cursor, user, "shift_created", "shift", shift_id,
+                         after={"staff_id": payload.staff_id, "shift_date": payload.shift_date,
+                               "start_time": payload.start_time, "end_time": payload.end_time})
+            return {"message": "Shift created", "shift_id": shift_id}
+
+@app.get("/api/manager/time-off", tags=["Manager"])
+def list_time_off(user: dict = Depends(require_role(["manager"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT t.*, u.full_name AS staff_name
+                FROM staff_time_off t
+                JOIN users u ON u.id = t.staff_id
+                ORDER BY t.created_at DESC
+            """)
+            return {"time_off": cursor.fetchall()}
+
+@app.patch("/api/manager/time-off/{time_off_id}", tags=["Manager"])
+def review_time_off(time_off_id: int, payload: TimeOffReviewSchema,
+                    user: dict = Depends(require_role(["manager"]))):
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM staff_time_off WHERE id = %s FOR UPDATE", (time_off_id,))
+            before = cursor.fetchone()
+            if not before:
+                raise HTTPException(status_code=404, detail="Time-off request not found")
+            cursor.execute("""
+                UPDATE staff_time_off
+                SET status = %s, reviewed_by = %s, reviewed_at = NOW()
+                WHERE id = %s
+            """, (payload.status, user["id"], time_off_id))
+            log_activity(cursor, user, "time_off_reviewed", "time_off", time_off_id,
+                         before=before, after={"status": payload.status})
+            return {"message": "Time-off request reviewed", "time_off_id": time_off_id}
+
+@app.get("/api/manager/settings", tags=["Manager"])
+def get_settings(user: dict = Depends(require_role(["manager"]))):
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT setting_key, setting_value, updated_at FROM business_settings")
+            return {"settings": cursor.fetchall()}
+
+@app.put("/api/manager/settings/{setting_key}", tags=["Manager"])
+def update_setting(setting_key: str, payload: dict,
+                   user: dict = Depends(require_role(["manager"]))):
+    if not setting_key or len(setting_key) > 100:
+        raise HTTPException(status_code=400, detail="Invalid setting key")
+    if not payload:
+        raise HTTPException(status_code=400, detail="Setting value is required")
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO business_settings (setting_key, setting_value, updated_by)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                                        updated_by = VALUES(updated_by)
+            """, (setting_key, json.dumps(payload), user["id"]))
+            log_activity(cursor, user, "setting_updated", "business_setting", setting_key,
+                         after=payload)
+            return {"message": "Setting updated", "setting_key": setting_key}
+
+@app.get("/api/manager/reports/summary", tags=["Manager"])
+def manager_report_summary(start_date: str, end_date: str,
+                           user: dict = Depends(require_role(["manager"]))):
+    try:
+        datetime.date.fromisoformat(start_date)
+        datetime.date.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date range")
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="End date must not precede start date")
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT
+                    COUNT(*) AS booking_count,
+                    COALESCE(SUM(CASE WHEN status != 'CANCELLED'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS booking_value,
+                    COALESCE(SUM(CASE WHEN payment_status = 'PAID'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS collected_payments,
+                    COALESCE(SUM(CASE WHEN payment_status IN ('PENDING','AUTHORIZED')
+                                      AND status != 'CANCELLED'
+                                      THEN total_price_gbp ELSE 0 END), 0) AS outstanding
+                FROM bookings
+                WHERE scheduled_date BETWEEN %s AND %s
+            """, (start_date, end_date))
+            booking_totals = cursor.fetchone()
+            cursor.execute("""
+                SELECT COALESCE(SUM(amount_gbp), 0) AS expenses
+                FROM expenses
+                WHERE expense_date BETWEEN %s AND %s
+            """, (start_date, end_date))
+            expense_totals = cursor.fetchone()
+            return {
+                "date_range": {"start": start_date, "end": end_date},
+                "booking_count": booking_totals["booking_count"] or 0,
+                "booking_value_gbp": float(booking_totals["booking_value"] or 0),
+                "collected_payments_gbp": float(booking_totals["collected_payments"] or 0),
+                "outstanding_gbp": float(booking_totals["outstanding"] or 0),
+                "expenses_gbp": float(expense_totals["expenses"] or 0),
+                "profit_gbp": None,
+                "profit_note": "Profit is not reported until a complete expense model is verified.",
             }
 
 @app.get("/api/manager/bookings", tags=["Manager"])
@@ -1730,22 +2070,22 @@ def list_available_staff(
                 SELECT u.id, u.full_name, u.email, u.phone, u.avatar_url,
                        sp.base_postcode, sp.service_radius_miles, sp.rating_avg, sp.rating_count,
                        sp.is_available, sp.verified_dbs, sp.right_to_work_verified,
-                       sp.vetting_status, sp.dbs_document_ref, sp.right_to_work_document_ref
+                       sp.vetting_status, sp.dbs_document_ref, sp.right_to_work_document_ref,
+                       COALESCE(j.job_count, 0) AS jobs_today
                 FROM users u
                 JOIN staff_profiles sp ON u.id = sp.user_id
+                LEFT JOIN (
+                    SELECT staff_id, COUNT(*) AS job_count
+                    FROM bookings
+                    WHERE scheduled_date = COALESCE(%s, CURRENT_DATE())
+                      AND status NOT IN ('CANCELLED', 'COMPLETED')
+                    GROUP BY staff_id
+                ) j ON j.staff_id = u.id
                 WHERE u.role_id = 2
-            """)
+            """, (scheduled_date,))
             staff = cursor.fetchall()
             target_coords = resolve_postcode_coords(postcode)[0:2] if postcode else None
             for cleaner in staff:
-                cursor.execute("""
-                    SELECT COUNT(*) AS job_count
-                    FROM bookings
-                    WHERE staff_id = %s
-                      AND scheduled_date = COALESCE(%s, CURRENT_DATE())
-                      AND status NOT IN ('CANCELLED', 'COMPLETED')
-                """, (cleaner["id"], scheduled_date))
-                cleaner["jobs_today"] = cursor.fetchone()["job_count"]
                 if target_coords:
                     base_coords = resolve_postcode_coords(cleaner["base_postcode"])[0:2]
                     cleaner["distance_miles"] = round(
@@ -2328,6 +2668,130 @@ def ensure_operational_schema():
                     sent_at TIMESTAMP NULL,
                     CONSTRAINT fk_notification_user FOREIGN KEY (recipient_user_id) REFERENCES users (id) ON DELETE SET NULL,
                     INDEX idx_notification_recipient (recipient_user_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                SELECT COLUMN_NAME FROM information_schema.COLUMNS
+                WHERE TABLE_SCHEMA = %s AND TABLE_NAME = 'notification_outbox'
+            """, (DB_NAME,))
+            notification_columns = {row["COLUMN_NAME"] for row in cursor.fetchall()}
+            for column, definition in {
+                "is_read": "BOOLEAN NOT NULL DEFAULT FALSE",
+                "priority": "ENUM('LOW','NORMAL','HIGH','CRITICAL') NOT NULL DEFAULT 'NORMAL'",
+                "deep_link": "VARCHAR(255) NULL",
+            }.items():
+                if column not in notification_columns:
+                    cursor.execute(f"ALTER TABLE notification_outbox ADD COLUMN {column} {definition}")
+
+            cursor.execute("""
+                ALTER TABLE bookings MODIFY COLUMN status
+                ENUM('PENDING','APPROVED','CONFIRMED','SCHEDULED','EN_ROUTE','IN_PROGRESS','COMPLETED','REJECTED','CANCELLED')
+                NOT NULL DEFAULT 'SCHEDULED'
+            """)
+
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS payment_records (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    booking_id INT NOT NULL,
+                    amount_gbp DECIMAL(8,2) NOT NULL,
+                    method ENUM('CASH','CARD','BANK_TRANSFER','REFUND','OTHER') NOT NULL,
+                    status ENUM('RECORDED','VERIFIED','REFUND_REQUESTED','REFUNDED','REJECTED') NOT NULL DEFAULT 'RECORDED',
+                    reference VARCHAR(100) NULL,
+                    recorded_by INT NOT NULL,
+                    verified_by INT NULL,
+                    recorded_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    verified_at TIMESTAMP NULL,
+                    CONSTRAINT fk_payment_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE RESTRICT,
+                    CONSTRAINT fk_payment_recorded_by FOREIGN KEY (recorded_by) REFERENCES users(id) ON DELETE RESTRICT,
+                    CONSTRAINT fk_payment_verified_by FOREIGN KEY (verified_by) REFERENCES users(id) ON DELETE RESTRICT,
+                    INDEX idx_payment_booking (booking_id, recorded_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS support_cases (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    booking_id INT NULL,
+                    customer_id INT NOT NULL,
+                    assigned_to INT NULL,
+                    subject VARCHAR(160) NOT NULL,
+                    description TEXT NOT NULL,
+                    status ENUM('OPEN','IN_PROGRESS','RESOLVED') NOT NULL DEFAULT 'OPEN',
+                    outcome TEXT NULL,
+                    follow_up_at TIMESTAMP NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_support_booking FOREIGN KEY (booking_id) REFERENCES bookings(id) ON DELETE SET NULL,
+                    CONSTRAINT fk_support_customer FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE RESTRICT,
+                    CONSTRAINT fk_support_assignee FOREIGN KEY (assigned_to) REFERENCES users(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS activity_audit_log (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    actor_id INT NULL,
+                    actor_role VARCHAR(30) NULL,
+                    action VARCHAR(80) NOT NULL,
+                    entity_type VARCHAR(80) NOT NULL,
+                    entity_id VARCHAR(100) NULL,
+                    before_json JSON NULL,
+                    after_json JSON NULL,
+                    reason VARCHAR(500) NULL,
+                    request_id VARCHAR(100) NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    INDEX idx_audit_entity (entity_type, entity_id),
+                    INDEX idx_audit_actor (actor_id, created_at)
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS staff_shifts (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    staff_id INT NOT NULL,
+                    shift_date DATE NOT NULL,
+                    start_time TIME NOT NULL,
+                    end_time TIME NOT NULL,
+                    status ENUM('PLANNED','CONFIRMED','CANCELLED') NOT NULL DEFAULT 'PLANNED',
+                    created_by INT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    UNIQUE KEY uq_staff_shift_slot (staff_id, shift_date, start_time, end_time),
+                    CONSTRAINT fk_shift_staff FOREIGN KEY (staff_id) REFERENCES users(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_shift_creator FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE RESTRICT
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS staff_time_off (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    staff_id INT NOT NULL,
+                    start_date DATE NOT NULL,
+                    end_date DATE NOT NULL,
+                    reason VARCHAR(255) NULL,
+                    status ENUM('PENDING','APPROVED','REJECTED') NOT NULL DEFAULT 'PENDING',
+                    reviewed_by INT NULL,
+                    reviewed_at TIMESTAMP NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_timeoff_staff FOREIGN KEY (staff_id) REFERENCES users(id) ON DELETE CASCADE,
+                    CONSTRAINT fk_timeoff_reviewer FOREIGN KEY (reviewed_by) REFERENCES users(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS business_settings (
+                    setting_key VARCHAR(100) PRIMARY KEY,
+                    setting_value JSON NOT NULL,
+                    updated_by INT NULL,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_settings_updater FOREIGN KEY (updated_by) REFERENCES users(id) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS expenses (
+                    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+                    expense_date DATE NOT NULL,
+                    category VARCHAR(80) NOT NULL,
+                    amount_gbp DECIMAL(10,2) NOT NULL,
+                    description VARCHAR(255) NULL,
+                    recorded_by INT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    CONSTRAINT fk_expense_recorded_by FOREIGN KEY (recorded_by) REFERENCES users(id) ON DELETE RESTRICT
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
             migrate_plaintext_access_notes(cursor)
