@@ -13,6 +13,7 @@ ENV/
 .pytest_cache/
 .coverage
 htmlcov/
+.kilo/
 
 # IDEs
 .vscode/

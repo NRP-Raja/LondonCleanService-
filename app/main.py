@@ -156,9 +156,6 @@ def hash_password(password: str) -> str:
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     if not hashed_password:
         return False
-    # Demo seed hash compatibility
-    if plain_password == "Password123!" and ("$2b$12$" in hashed_password or "$2a$12$" in hashed_password):
-        return True
     try:
         return bcrypt.checkpw(plain_password[:72].encode('utf-8'), hashed_password.encode('utf-8'))
     except Exception:
@@ -514,8 +511,20 @@ app.add_middleware(
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PATCH", "PUT", "DELETE"],
-    allow_headers=["Authorization", "Content-Type"],
+    allow_headers=["Authorization", "Content-Type", "Idempotency-Key"],
 )
+
+@app.middleware("http")
+async def add_security_headers(request: Request, call_next):
+    """Enforce defense-in-depth HTTP security response headers."""
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "SAMEORIGIN"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    if IS_PRODUCTION:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
 
 # ==========================================================
 # HELPER FUNCTIONS FOR POSTCODES & DISTANCES
@@ -725,7 +734,8 @@ def check_staff_availability(cursor, staff_id: int, target_date: str, target_tim
 # 1. AUTHENTICATION & USER MANAGEMENT
 # ==========================================================
 @app.post("/api/auth/register", tags=["Auth"])
-def register_user(payload: UserRegisterSchema):
+@limiter.limit("5/minute")
+def register_user(request: Request, payload: UserRegisterSchema):
     with get_db() as conn:
         with conn.cursor() as cursor:
             # Check duplicate email
@@ -796,35 +806,63 @@ def get_current_user_profile(user: dict = Depends(get_current_user)):
 def google_oauth_login(payload: GoogleLoginSchema):
     """
     Google OAuth 2.0 Sign-In endpoint with Mock Mode Fallback.
-    In real mode, it verifies the Google JWT ID token.
-    In mock mode, it allows immediate zero-friction simulation.
+    In production mode, verifies the Google JWT ID token with Google tokeninfo.
+    In development mock mode, allows simulation but strictly blocks privilege escalation
+    and prevents takeover of manager or staff accounts.
     """
-    mock_email = payload.email or "google.user@cleanlondon.demo"
-    mock_name = payload.name or "Google London Client"
+    if IS_PRODUCTION and not MOCK_MODE:
+        try:
+            req = urllib.request.Request(
+                f"https://oauth2.googleapis.com/tokeninfo?id_token={urllib.parse.quote(payload.id_token)}"
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                token_data = json.loads(resp.read().decode("utf-8"))
+            if token_data.get("aud") != GOOGLE_CLIENT_ID:
+                raise HTTPException(status_code=401, detail="Invalid Google OAuth token audience")
+            google_email = token_data.get("email")
+            google_sub = token_data.get("sub")
+            google_name = token_data.get("name") or "Google User"
+            if not google_email:
+                raise HTTPException(status_code=401, detail="Google token does not contain email")
+        except HTTPException:
+            raise
+        except Exception:
+            raise HTTPException(status_code=401, detail="Invalid or expired Google OAuth ID token")
+    else:
+        google_email = payload.email or "google.user@cleanlondon.demo"
+        google_name = payload.name or "Google London Client"
+        google_sub = "google-sub-" + str(random.randint(1000, 9999))
 
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
-                SELECT u.id, u.email, u.full_name, r.name as role, u.avatar_url
+                SELECT u.id, u.email, u.full_name, r.name as role, u.avatar_url, u.google_id
                 FROM users u
                 JOIN roles r ON u.role_id = r.id
                 WHERE u.email = %s
-            """, (mock_email,))
+            """, (google_email,))
             user = cursor.fetchone()
 
-            if not user:
-                # Create user with Customer role
+            if user:
+                # Security Protection: Prevent takeover of administrative / staff accounts via Google OAuth
+                if user["role"] in ["manager", "staff"]:
+                    raise HTTPException(
+                        status_code=403,
+                        detail="Staff and Manager accounts cannot sign in via Google OAuth. Please use your email and password."
+                    )
+                user_id = user["id"]
+                role_name = user["role"]
+                if not user.get("google_id"):
+                    cursor.execute("UPDATE users SET google_id = %s WHERE id = %s", (google_sub, user_id))
+            else:
                 cursor.execute("SELECT id FROM roles WHERE name = 'customer'")
                 role_id = cursor.fetchone()["id"]
                 cursor.execute("""
                     INSERT INTO users (role_id, email, password_hash, full_name, phone, google_id, avatar_url)
                     VALUES (%s, %s, %s, %s, %s, %s, %s)
-                """, (role_id, mock_email, hash_password("GoogleAuthPassword123!"), mock_name, "+44 7900 112233", "google-sub-" + str(random.randint(1000, 9999)), "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"))
+                """, (role_id, google_email, hash_password("GoogleAuthPassword123!"), google_name, "+44 7900 112233", google_sub, "https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?w=150"))
                 user_id = cursor.lastrowid
                 role_name = "customer"
-            else:
-                user_id = user["id"]
-                role_name = user["role"]
 
             token = create_access_token({"user_id": user_id, "role": role_name})
             return {
@@ -834,8 +872,8 @@ def google_oauth_login(payload: GoogleLoginSchema):
                 "token_type": "bearer",
                 "user": {
                     "id": user_id,
-                    "email": mock_email,
-                    "full_name": mock_name,
+                    "email": google_email,
+                    "full_name": user["full_name"] if user else google_name,
                     "role": role_name
                 }
             }
@@ -2083,13 +2121,11 @@ async def stripe_webhook(request: Request):
     sig_header = request.headers.get("stripe-signature")
 
     event = None
-    is_mock_webhook = (
-        not STRIPE_WEBHOOK_SECRET
-        or "mock" in STRIPE_WEBHOOK_SECRET.lower()
-        or not sig_header
-    )
-
-    if not is_mock_webhook:
+    if IS_PRODUCTION:
+        if not sig_header:
+            raise HTTPException(status_code=400, detail="Missing stripe-signature header")
+        if not STRIPE_WEBHOOK_SECRET or "mock" in STRIPE_WEBHOOK_SECRET.lower():
+            raise HTTPException(status_code=500, detail="Stripe webhook secret is not configured for production")
         try:
             event = stripe.Webhook.construct_event(
                 payload=payload,
@@ -2101,12 +2137,21 @@ async def stripe_webhook(request: Request):
         except stripe.error.SignatureVerificationError:
             raise HTTPException(status_code=400, detail="Invalid Stripe webhook signature")
     else:
-        # Development / test webhook parser
-        import json
-        try:
-            event = json.loads(payload.decode("utf-8"))
-        except Exception:
-            raise HTTPException(status_code=400, detail="Could not parse mock JSON payload")
+        # Development / test webhook handler
+        if sig_header and STRIPE_WEBHOOK_SECRET and "mock" not in STRIPE_WEBHOOK_SECRET.lower():
+            try:
+                event = stripe.Webhook.construct_event(
+                    payload=payload,
+                    sig_header=sig_header,
+                    secret=STRIPE_WEBHOOK_SECRET
+                )
+            except (ValueError, stripe.error.SignatureVerificationError) as exc:
+                raise HTTPException(status_code=400, detail=f"Invalid webhook signature: {str(exc)}")
+        else:
+            try:
+                event = json.loads(payload.decode("utf-8"))
+            except Exception:
+                raise HTTPException(status_code=400, detail="Could not parse mock JSON payload")
 
     event_type = event.get("type")
 
@@ -2187,7 +2232,8 @@ def verify_payment_session(session_id: str, booking_id: Optional[int] = None):
             params = [session_id]
 
             if booking_id:
-                query += " OR b.id = %s"
+                # Security Fix: Enforce AND condition so callers cannot enumerate bookings by ID without a valid Stripe session ID
+                query += " AND b.id = %s"
                 params.append(booking_id)
 
             cursor.execute(query, tuple(params))
@@ -2285,6 +2331,13 @@ def ensure_operational_schema():
                 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4
             """)
             migrate_plaintext_access_notes(cursor)
+            # Migrate dummy legacy seed password hashes to valid bcrypt hashes matching Password123!
+            valid_demo_hash = "$2b$12$Ww6zkTlA7XwpVflMIq1aRuvMunTakRHn3ShYtgTFF//GWiEmZRjNq"
+            cursor.execute("""
+                UPDATE users
+                SET password_hash = %s
+                WHERE password_hash = '$2b$12$Kk2rI0PjU7zT5lY4k2bV0O6uH0jQ4k8l1m2n3o4p5q6r7s8t9u0v.'
+            """, (valid_demo_hash,))
 
 # ==========================================================
 # 8. FRONTEND STATIC ASSETS MOUNT
