@@ -195,15 +195,15 @@ INSERT INTO roles (id, name, description) VALUES
 -- SHA-256 fallback compatibility: a109e36947ad56de1dca1cc49f0ef8ac9ad9a7b1aa0df41fb3c4cb73c1ff01ea
 INSERT INTO users (id, role_id, email, password_hash, full_name, phone, avatar_url) VALUES
 -- 1 Manager
-(1, 3, 'admin@cleanlondon.co.uk', '$2b$12$Kk2rI0PjU7zT5lY4k2bV0O6uH0jQ4k8l1m2n3o4p5q6r7s8t9u0v.', 'Charlotte Windsor', '+44 20 7946 0912', 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150'),
+(1, 3, 'admin@cleanlondon.co.uk', '$2b$12$Ww6zkTlA7XwpVflMIq1aRuvMunTakRHn3ShYtgTFF//GWiEmZRjNq', 'Charlotte Windsor', '+44 20 7946 0912', 'https://images.unsplash.com/photo-1573496359142-b8d87734a5a2?w=150'),
 
 -- 2 Cleaners (Staff)
-(2, 2, 'cleaner.elena@cleanlondon.co.uk', '$2b$12$Kk2rI0PjU7zT5lY4k2bV0O6uH0jQ4k8l1m2n3o4p5q6r7s8t9u0v.', 'Elena Petrova', '+44 7700 900142', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150'),
-(3, 2, 'cleaner.marcus@cleanlondon.co.uk', '$2b$12$Kk2rI0PjU7zT5lY4k2bV0O6uH0jQ4k8l1m2n3o4p5q6r7s8t9u0v.', 'Marcus Sterling', '+44 7700 900583', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150'),
+(2, 2, 'cleaner.elena@cleanlondon.co.uk', '$2b$12$Ww6zkTlA7XwpVflMIq1aRuvMunTakRHn3ShYtgTFF//GWiEmZRjNq', 'Elena Petrova', '+44 7700 900142', 'https://images.unsplash.com/photo-1580489944761-15a19d654956?w=150'),
+(3, 2, 'cleaner.marcus@cleanlondon.co.uk', '$2b$12$Ww6zkTlA7XwpVflMIq1aRuvMunTakRHn3ShYtgTFF//GWiEmZRjNq', 'Marcus Sterling', '+44 7700 900583', 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150'),
 
 -- 2 Customers
-(4, 1, 'oliver.smith@example.co.uk', '$2b$12$Kk2rI0PjU7zT5lY4k2bV0O6uH0jQ4k8l1m2n3o4p5q6r7s8t9u0v.', 'Oliver Smith', '+44 7911 123456', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150'),
-(5, 1, 'sophia.patel@example.co.uk', '$2b$12$Kk2rI0PjU7zT5lY4k2bV0O6uH0jQ4k8l1m2n3o4p5q6r7s8t9u0v.', 'Sophia Patel', '+44 7911 654321', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150');
+(4, 1, 'oliver.smith@example.co.uk', '$2b$12$Ww6zkTlA7XwpVflMIq1aRuvMunTakRHn3ShYtgTFF//GWiEmZRjNq', 'Oliver Smith', '+44 7911 123456', 'https://images.unsplash.com/photo-1500648767791-00dcc994a43e?w=150'),
+(5, 1, 'sophia.patel@example.co.uk', '$2b$12$Ww6zkTlA7XwpVflMIq1aRuvMunTakRHn3ShYtgTFF//GWiEmZRjNq', 'Sophia Patel', '+44 7911 654321', 'https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150');
 
 -- 3. Seed Staff Profiles
 INSERT INTO staff_profiles (user_id, base_postcode, service_radius_miles, rating_avg, rating_count, is_available, verified_dbs) VALUES

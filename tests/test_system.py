@@ -11,6 +11,21 @@ def test_full_system():
     print(" CLEANLONDON COMPREHENSIVE END-TO-END TEST SUITE")
     print("==================================================")
 
+    # Pre-test isolation: Mark any earlier in-flight test jobs completed so demo cleaners are available
+    try:
+        from app.main import get_db
+        with get_db() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    UPDATE bookings
+                    SET status = 'COMPLETED'
+                    WHERE status IN ('EN_ROUTE', 'IN_PROGRESS')
+                      AND scheduled_date = CURDATE()
+                """)
+                conn.commit()
+    except Exception:
+        pass
+
     # 1. Test Static Homepage
     print("\n[Test 1] Checking Frontend Homepage Delivery (GET /)...")
     r = requests.get(f"{BASE_URL}/")
@@ -335,7 +350,7 @@ def test_full_system():
         "property_type": "1-Bed Flat",
         "bedrooms": 1,
         "bathrooms": 1,
-        "address_line1": "72 Holland Park Avenue",
+        "address_line1": f"{random.randint(100, 999)} Holland Park Avenue",
         "city": "London",
         "postcode": "W8 7QB",
         "key_handling_type": "KEY_SAFE_BOX",
@@ -345,7 +360,7 @@ def test_full_system():
         "idempotency_key": f"GDPR-IDEM-{random.randint(100000, 999999)}"
     }
     r_gdpr = requests.post(f"{BASE_URL}/api/bookings", json=gdpr_booking_payload, headers=cust_headers)
-    assert r_gdpr.status_code == 200
+    assert r_gdpr.status_code == 200, f"GDPR Booking creation failed: {r_gdpr.text}"
     gdpr_b_id = r_gdpr.json()["booking_id"]
 
     # Customer viewing own booking sees their notes
@@ -399,8 +414,36 @@ def test_full_system():
     assert "expired" in r_expired.json()["detail"].lower() or "credentials" in r_expired.json()["detail"].lower()
     print(" -> PASSED: Expired JWT correctly rejected with HTTP 401 (triggers graceful frontend expiry handler).")
 
+    # 20. Test Backdoor Removal & Password Hardening
+    print("\n[Test 20] Testing Password Backdoor Removal & Bcrypt Integrity...")
+    r_bad_pwd = requests.post(f"{BASE_URL}/api/auth/login", json={"email": "admin@cleanlondon.co.uk", "password": "WrongPassword99!"})
+    assert r_bad_pwd.status_code == 401, f"Expected 401 for incorrect password, got {r_bad_pwd.status_code}"
+    r_good_pwd = requests.post(f"{BASE_URL}/api/auth/login", json={"email": "admin@cleanlondon.co.uk", "password": "Password123!"})
+    assert r_good_pwd.status_code == 200, f"Expected 200 for valid password, got {r_good_pwd.status_code}"
+    print(" -> PASSED: Password backdoor eliminated; native bcrypt verification strictly enforced.")
+
+    # 21. Test Google OAuth Account Takeover Prevention
+    print("\n[Test 21] Testing Google OAuth Account Takeover Prevention...")
+    r_google_hijack = requests.post(f"{BASE_URL}/api/auth/google/login", json={"id_token": "mock-token", "email": "admin@cleanlondon.co.uk"})
+    assert r_google_hijack.status_code == 403, f"Expected 403 blocking administrative Google takeover, got {r_google_hijack.status_code}"
+    print(" -> PASSED: Google OAuth takeover blocked for privileged manager/staff accounts (HTTP 403).")
+
+    # 22. Test HTTP Defense-in-Depth Security Headers
+    print("\n[Test 22] Testing HTTP Security Headers Middleware...")
+    r_headers = requests.get(f"{BASE_URL}/")
+    assert r_headers.headers.get("X-Content-Type-Options") == "nosniff", "Missing X-Content-Type-Options: nosniff"
+    assert r_headers.headers.get("X-Frame-Options") == "SAMEORIGIN", "Missing X-Frame-Options: SAMEORIGIN"
+    assert r_headers.headers.get("Referrer-Policy") == "strict-origin-when-cross-origin", "Missing Referrer-Policy"
+    print(" -> PASSED: Required HTTP security headers present (nosniff, SAMEORIGIN, strict-origin-when-cross-origin).")
+
+    # 23. Test Unauthenticated Payment Verification IDOR / BOLA Prevention
+    print("\n[Test 23] Testing Payment Session Verification IDOR Protection...")
+    r_idor_verify = requests.get(f"{BASE_URL}/api/payments/session/invalid_session_token/verify?booking_id=1")
+    assert r_idor_verify.status_code == 404, f"Expected 404 blocking unauthenticated booking IDOR, got {r_idor_verify.status_code}"
+    print(" -> PASSED: Unauthenticated booking enumeration blocked via strict session matching (HTTP 404).")
+
     print("\n==================================================================")
-    print(" ✅ ALL 19 TESTS PASSED! SECURITY & UK GDPR CONTROLS VERIFIED")
+    print(" ✅ ALL 23 TESTS PASSED! SECURITY AUDIT CONTROLS VERIFIED")
     print("==================================================================")
 
 if __name__ == "__main__":
