@@ -293,18 +293,14 @@ customer-facing APIs.
 Provide:
 
 -   Paid, unpaid, overdue and refunded payment views.
--   Payment history linked to each booking.
--   Cash payment recording/verification.
--   Outstanding balance monitoring.
--   Refund review and execution only where the payment provider and
-    existing backend support it.
+-   Stripe payment history linked to each booking.
+-   Outstanding and failed Stripe payment monitoring.
+-   Refund review and execution through the Stripe integration only.
+-   Reconciliation of Stripe payment events against booking records.
 -   Invoice/receipt viewing and generation where supported.
 -   Date-filtered finance reports and export.
 
-The agreed starting payment workflow is cash: staff can record that cash
-was received, and managers can monitor and verify payment records.
-Preserve this workflow unless the current implementation establishes a
-different supported method.
+**First-release payment policy: Stripe only.** All customer payments must pass through the configured Stripe integration. Do not support cash, bank transfer, manual/off-platform collection or a second payment provider. Staff must not collect or record payments and must not edit payment status. Managers may inspect Stripe transaction records, investigate exceptions and initiate refunds through Stripe using an authorised backend workflow. A manager must never manually mark an unverified payment as paid. Payment success/refund state must be based on trusted Stripe responses/webhooks and recorded separately from booking and cleaning-job status. The current manager payment schema/service must be reviewed because it presently allows methods such as CASH, CARD, BANK_TRANSFER, REFUND and OTHER; legacy options must not remain available in the first-release UI/API.
 
 **Financial correctness:**
 
@@ -314,14 +310,12 @@ different supported method.
     date.
 -   Store money as decimal/fixed-point values, never binary
     floating-point.
--   Record payment actor, timestamp, amount, method, reference and
-    related booking.
+-   Record Stripe payment/refund identifiers, amount, currency, event/status, timestamps and related booking; record the authorised manager actor for refund initiation or manual reconciliation notes.
 -   Prevent duplicate payment recording with idempotency/unique
     constraints where appropriate.
 -   Do not claim that a refund was processed if the system only records
     a refund request.
--   Do not add card processing or a payment gateway without explicit
-    product approval and secure provider integration.
+-   Stripe is the only approved payment provider for the first release. Do not add cash, bank transfer, manual payment marking or another gateway. Use secure Stripe integration and trusted webhook/session verification.
 
 ### 5.8 Customer support
 
@@ -593,8 +587,8 @@ implementation.
 
 ### Phase 4 --- Finance and support
 
--   Correct payment/revenue definitions.
--   Add cash verification and payment history improvements.
+-   Correct payment/revenue definitions and enforce Stripe-only payment policy.
+-   Complete Stripe transaction reconciliation, payment history and refund workflows.
 -   Add refunds/invoices only where supported.
 -   Add customer support and review workflows based on verified data.
 
@@ -674,3 +668,8 @@ The redesign is not complete until:
 built on the existing LondonCleanService application---not a visually
 impressive redesign that breaks the booking system or misrepresents
 business data.
+
+
+## First-release payment policy — authoritative cross-dashboard rule
+
+Stripe is the sole payment provider in the first release. Customers pay through Stripe during booking; a booking becomes confirmed only after server-side verification of the Stripe payment. Stripe may present cards and eligible wallet methods supported by the configured account, but there is no cash, bank transfer, manual/off-platform collection or alternative gateway. Staff have no payment-collection or payment-editing permissions. Managers can review Stripe transactions, investigate failed/pending payments and initiate refunds through Stripe; they cannot mark a payment successful without verified provider evidence. Refund state is tracked independently from booking status and job progress. The same policy must be enforced in frontend controls, API schemas, backend services, database rules where appropriate, tests and all three role-based interfaces. This section supersedes older cash-handling statements in this document or the repository.
