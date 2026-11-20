@@ -17,6 +17,12 @@ from app.core.config import JWT_SECRET_KEY, JWT_ALGORITHM, ACCESS_TOKEN_EXPIRE_M
 pwd_context = CryptContext(schemes=["bcrypt"], deprecated="auto")
 
 
+def hash_password(password: str) -> str:
+    """Hash a plain-text password using native bcrypt."""
+    pwd_bytes = password[:72].encode("utf-8")
+    return bcrypt.hashpw(pwd_bytes, bcrypt.gensalt()).decode("utf-8")
+
+
 def verify_password(plain_password: str, hashed_password: str) -> bool:
     """Verify a plain-text password against a bcrypt hash."""
     try:

@@ -73,7 +73,10 @@ def register_user(
 
             cursor.execute("SELECT id FROM users WHERE email = %s", (email,))
             if cursor.fetchone():
-                raise HTTPException(status_code=409, detail="Email already registered")
+                raise HTTPException(
+                    status_code=400,
+                    detail="An account with this email address already exists",
+                )
 
             password_hash = hash_password(password)
             cursor.execute(

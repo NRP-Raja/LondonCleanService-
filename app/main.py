@@ -551,6 +551,9 @@ app = FastAPI(
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
+from app.routes.auth import router as auth_router
+app.include_router(auth_router)
+
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
 
 app.add_middleware(
@@ -780,7 +783,7 @@ def check_staff_availability(cursor, staff_id: int, target_date: str, target_tim
 # ==========================================================
 # 1. AUTHENTICATION & USER MANAGEMENT
 # ==========================================================
-@app.post("/api/auth/register", tags=["Auth"])
+# Legacy implementation retained temporarily for compatibility; route owned by app.routes.auth.
 @limiter.limit("5/minute")
 def register_user(request: Request, payload: UserRegisterSchema):
     with get_db() as conn:
@@ -817,7 +820,7 @@ def register_user(request: Request, payload: UserRegisterSchema):
                 }
             }
 
-@app.post("/api/auth/login", tags=["Auth"])
+# Legacy implementation retained temporarily for compatibility; route owned by app.routes.auth.
 @limiter.limit("10/minute")
 def login_user(request: Request, payload: LoginSchema):
     with get_db() as conn:
@@ -845,11 +848,11 @@ def login_user(request: Request, payload: LoginSchema):
                 }
             }
 
-@app.get("/api/auth/me", tags=["Auth"])
+# Legacy implementation retained temporarily for compatibility; route owned by app.routes.auth.
 def get_current_user_profile(user: dict = Depends(get_current_user)):
     return {"user": user}
 
-@app.post("/api/auth/google/login", tags=["Auth"])
+# Legacy implementation retained temporarily for compatibility; route owned by app.routes.auth.
 def google_oauth_login(payload: GoogleLoginSchema):
     """
     Google OAuth 2.0 Sign-In endpoint with Mock Mode Fallback.
@@ -925,7 +928,7 @@ def google_oauth_login(payload: GoogleLoginSchema):
                 }
             }
 
-@app.post("/api/auth/demo-switch", tags=["Auth"])
+# Legacy implementation retained temporarily for compatibility; route owned by app.routes.auth.
 def demo_switch_role(role: str = Body(..., embed=True)):
     """
     Convenience endpoint for review: Instantly generates a valid JWT

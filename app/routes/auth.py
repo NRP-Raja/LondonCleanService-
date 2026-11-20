@@ -1,10 +1,10 @@
 """CleanLondon Authentication Routes — HTTP endpoint definitions for auth."""
 
-from fastapi import APIRouter, Request, Depends, Body, status
+from fastapi import APIRouter, Request, Depends, Body, HTTPException, status
 from fastapi.responses import JSONResponse
 
 from app.core.dependencies import get_current_user
-from app.core.security import limiter, oauth2_scheme
+from app.core.security import limiter, oauth2_scheme, create_access_token
 from app.core.config import IS_PRODUCTION, ENVIRONMENT, DEMO_AUTH_ENABLED, DEMO_AUTH_ALLOWED_ENVIRONMENTS
 from app.database.connection import get_idempotency_key
 from app.schemas.auth import (
@@ -21,6 +21,26 @@ from app.services.auth import (
 )
 
 router = APIRouter(prefix="/api/auth", tags=["Auth"])
+
+
+@router.post("/register", status_code=status.HTTP_200_OK)
+@limiter.limit("5/minute")
+def register_user_route(request: Request, payload: UserRegisterSchema):
+    """Register a customer account; public registration cannot select another role."""
+    user = register_user(
+        email=payload.email,
+        password=payload.password,
+        full_name=payload.full_name,
+        phone=payload.phone,
+        role="customer",
+    )
+    token = create_access_token({"user_id": user["id"], "role": "customer"})
+    return {
+        "message": "User registered successfully",
+        "access_token": token,
+        "token_type": "bearer",
+        "user": user,
+    }
 
 
 @router.post("/login", status_code=status.HTTP_200_OK)
