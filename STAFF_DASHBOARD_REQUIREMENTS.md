@@ -146,7 +146,7 @@ The existing application uses booking status values for both customer booking de
 - **Booking lifecycle:** customer request, approval/confirmation, cancellation/rejection and other customer-facing booking outcomes.
 - **Assignment lifecycle:** assigned, accepted, declined, expired, reassigned.
 - **Job progress:** on the way, arrived, cleaning started, cleaning completed.
-- **Payment lifecycle:** pending, paid, failed, refunded or other provider/cash states supported by the payment system.
+- **Payment lifecycle:** pending, paid, failed, refund pending, refunded or refund failed, based only on verified Stripe/provider events. No cash or manual payment states are supported in the first release.
 
 Do not solve this by blindly replacing existing enum values or changing every status in one pass. Inspect all existing database constraints, API contracts, frontend conditions, customer timelines, manager filters and tests. Introduce a backward-compatible mapping/migration strategy and update all role views together.
 
@@ -524,3 +524,8 @@ The staff dashboard is not complete until all applicable checks pass:
 ## First-release payment boundary — Stripe only
 
 The first release uses Stripe as the sole payment provider. Customers complete payment through the secure Stripe flow; booking confirmation requires trusted server-side Stripe verification. **Staff do not collect cash, record cash received, accept bank transfers, process payments, issue refunds, or edit payment status.** Staff may see only the minimum customer-safe payment state needed to understand the assigned job (for example, whether the booking is confirmed/paid if operationally necessary). They must not see card data, full payment credentials, Stripe secrets, or manager-only financial records. Job completion must never mark a payment as paid. Payment state is updated only by verified Stripe events and authorised manager refund/reconciliation workflows. This policy overrides any legacy cash-handling behaviour in the codebase.
+
+
+## Cross-dashboard lifecycle clarification
+
+See `CROSS_DASHBOARD_INTEGRATION.md` for the authoritative state model. Staff access begins only after a manager-approved (`CONFIRMED`) booking has an active assignment to that cleaner. Assignment acceptance does not itself confirm a booking or change payment status. A decline or assignment timeout leaves the customer booking confirmed and returns it to manager dispatch. Staff job progress updates the shared operational timeline; it never changes payment status. On reassignment, the previous cleaner loses active access to customer/property details and the new cleaner receives a new assignment with a fresh response deadline. The booking conversation remains the single conversation; participant access is updated according to the active assignment.
