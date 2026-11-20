@@ -188,7 +188,7 @@ Manager capabilities:
 
 -   View, search, sort and filter bookings.
 -   Review new requests and approve or reject them.
--   Assign and reassign cleaners.
+-   Assign and reassign cleaners only after a booking has been approved and moved to `CONFIRMED`.
 -   Change booking date, time and permitted service details.
 -   Process customer change requests.
 -   Cancel bookings and record a reason.
@@ -199,20 +199,16 @@ Manager capabilities:
 Preserve the agreed lifecycle where compatible with the existing
 application:
 
-`pending → approved → confirmed → completed`
+`PENDING_REVIEW → CONFIRMED → CANCELLED / REJECTED`
 
-Also support the existing agreed terminal/exception states:
-
-`rejected`, `cancelled`
+Treat job completion as a separate operational lifecycle, not as a booking-lifecycle status. Preserve legacy values through a reviewed backward-compatible mapping; do not expose duplicate or ambiguous approval states.
 
 Do not silently invent or rename statuses. Inspect existing
 enum/constants, frontend logic, database constraints and API validation
 first. Define allowed transitions centrally and reject invalid
 transitions on the backend.
 
-**24-hour pending rule:** A booking that remains pending for 24 hours
-must automatically expire/reject, including overnight, weekends and
-holidays, and the customer must be notified. Implement this with a
+**24-hour manager-review rule:** A booking enters `PENDING_REVIEW` only after Stripe payment has been verified. The 24-hour review clock starts at that point. A manager must approve or reject it within 24 hours, including overnight, weekends and holidays. If no decision is made, the system automatically rejects it and initiates a full Stripe refund. The customer must be notified of rejection and refund processing. Do not treat an unpaid checkout attempt as a manager-review booking. Implement this with a
 reliable server-side scheduled mechanism or equivalent---not a browser
 timer. Make it idempotent, timezone-aware and safe if the worker runs
 more than once. Record the automatic action in the audit history.
@@ -673,3 +669,8 @@ business data.
 ## First-release payment policy — authoritative cross-dashboard rule
 
 Stripe is the sole payment provider in the first release. Customers pay through Stripe during booking; a booking becomes confirmed only after server-side verification of the Stripe payment. Stripe may present cards and eligible wallet methods supported by the configured account, but there is no cash, bank transfer, manual/off-platform collection or alternative gateway. Staff have no payment-collection or payment-editing permissions. Managers can review Stripe transactions, investigate failed/pending payments and initiate refunds through Stripe; they cannot mark a payment successful without verified provider evidence. Refund state is tracked independently from booking status and job progress. The same policy must be enforced in frontend controls, API schemas, backend services, database rules where appropriate, tests and all three role-based interfaces. This section supersedes older cash-handling statements in this document or the repository.
+
+
+## Cross-dashboard lifecycle clarification
+
+Use `CROSS_DASHBOARD_INTEGRATION.md` as the authoritative integration contract for the customer, staff and manager dashboards. It defines the separate booking, payment, slot-reservation, assignment and job-progress lifecycles; event ownership; permissions; notifications; and end-to-end acceptance scenarios. If this redesign document conflicts with that integration contract, the integration contract takes precedence until the documents are deliberately revised together.
