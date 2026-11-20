@@ -229,12 +229,12 @@ Validate and normalise addresses/postcodes server-side. Never allow one customer
 
 Payment takes place during the booking wizard before the appointment is confirmed.
 
-Use the configured payment provider (currently Stripe integration exists). Support all methods enabled and supported by the Stripe account and checkout configuration, including debit/credit cards, Apple Pay and Google Pay where eligible. Do not promise a method that is unavailable for the current device, region, domain or provider account.
+**First-release payment policy: Stripe only.** All customer payments must be processed through the configured Stripe integration. The checkout may offer card and Stripe-supported wallet/payment methods (such as Apple Pay or Google Pay) only when enabled and eligible in the Stripe account and checkout configuration. Do not offer cash, bank transfer, manual/off-platform payment, or a second payment provider in this release. Do not promise a Stripe method unavailable for the current device, region, domain or provider account.
 
 - Use provider-hosted or provider-secure payment collection.
 - Never store raw card numbers, CVCs or full payment credentials in the application database.
 - Optional saved payment methods must use Stripe customer/payment-method references and provider-managed setup flows. Customers can remove a saved method.
-- Use GBP and validate the payable amount against the server-side booking quote.
+- Use GBP and validate the payable amount against the server-side booking quote. Stripe is the sole payment provider for the first release; no cash collection or manual payment marking is permitted.
 - Use idempotency keys for checkout/session creation and payment fulfilment.
 
 ### 7.2 Ten-minute slot reservation
@@ -781,3 +781,8 @@ These rules are mandatory:
 ---
 
 **Definition of done:** the customer dashboard is a connected, secure, responsive self-service product backed by real APIs and tested business workflows—not merely a redesigned collection of frontend screens.
+
+
+## 15. First-release payment policy clarification
+
+Stripe is the sole payment provider for the first release. Customers pay through Stripe checkout/payment flows before booking confirmation. Only verified Stripe events/session results can mark a payment successful. Do not support cash, bank transfer, manual/off-platform payment collection, or a second provider. Refunds must be initiated through Stripe and their provider-confirmed status must be reflected separately from booking status. Managers may review Stripe transactions and authorised refund outcomes; staff cannot view sensitive payment details, initiate refunds, or alter payment status. This policy overrides any older cash-payment wording elsewhere in the repository or earlier specifications.
