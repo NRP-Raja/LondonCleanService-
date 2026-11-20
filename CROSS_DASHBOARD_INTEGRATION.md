@@ -1,3 +1,5 @@
+> **Authority note:** `REQUIREMENTS_BASELINE.md` is the single authoritative first-release requirements document. This file is supporting detail. If anything here conflicts with the baseline, follow the baseline and update this document in the same change.
+
 # Cross-Dashboard Integration Contract
 
 **Project:** LondonCleaningService  
