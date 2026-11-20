@@ -227,7 +227,7 @@ Validate and normalise addresses/postcodes server-side. Never allow one customer
 
 ### 7.1 Payment timing and methods
 
-Payment takes place during the booking wizard before the appointment is confirmed.
+Payment takes place during the booking wizard before manager approval. A successful Stripe payment means **payment is paid**, not that the booking is yet manager-confirmed. The booking enters `PENDING_REVIEW` after trusted Stripe verification and becomes `CONFIRMED` only when a manager approves it.
 
 **First-release payment policy: Stripe only.** All customer payments must be processed through the configured Stripe integration. The checkout may offer card and Stripe-supported wallet/payment methods (such as Apple Pay or Google Pay) only when enabled and eligible in the Stripe account and checkout configuration. Do not offer cash, bank transfer, manual/off-platform payment, or a second payment provider in this release. Do not promise a Stripe method unavailable for the current device, region, domain or provider account.
 
@@ -248,18 +248,18 @@ When the customer enters checkout:
 - If payment fails, show a clear error and allow retry or another payment method while the reservation remains valid.
 - If the 10-minute reservation expires, release the slot and require the customer to select a new available slot.
 - Do not keep a slot reserved merely because a customer has an incomplete draft.
-- Handle late provider webhooks safely: if the reservation expired and the slot was legitimately released/rebooked, do not silently double-book. Reconcile the payment and provide a safe refund/manual resolution path.
+- Handle late provider webhooks safely: if the 10-minute reservation expired, do not silently double-book. If the slot cannot be safely reacquired, initiate a full Stripe refund and notify the customer; record the payment/refund outcome for manager review.
 
 ### 7.3 Confirmation authority
 
-A booking is confirmed only after the backend has verified successful payment through the payment provider's trusted server-side event/session verification.
+A booking is eligible for manager review only after the backend has verified successful payment through Stripe's trusted server-side event/session verification. Successful payment changes the payment lifecycle to `PAID` and the booking lifecycle to `PENDING_REVIEW`; it does not itself set the booking to `CONFIRMED`. The manager's approval action is the only normal transition from `PENDING_REVIEW` to `CONFIRMED`.
 
 - Do not confirm based solely on a browser redirect, query parameter, client callback or screenshot.
 - Verify webhook signature in production.
 - Make webhook handling idempotent and safe against duplicate/out-of-order events.
 - Persist payment and booking state changes transactionally.
-- Send confirmation only after successful verification.
-- If payment remains pending, show a pending payment state and do not tell the customer that the appointment is confirmed.
+- Send a payment-received / awaiting-manager-review update after successful verification. Send booking-confirmed only after manager approval.
+- If payment remains pending, show a pending payment state and do not tell the customer that the appointment is confirmed. After payment succeeds, show 'Payment received — awaiting manager approval' until the manager approves.
 - Keep booking status and payment status as separate concepts.
 
 ### 7.4 Payment failure and expiry
@@ -277,9 +277,9 @@ A booking is confirmed only after the backend has verified successful payment th
 
 Approved customer policy:
 
-- Cancellation with at least 24 hours' notice: full refund of the amount paid, returned to the original payment method.
+- Cancellation with at least 24 hours' notice: full refund of the amount paid, returned through Stripe to the original payment method.
 - Cancellation with less than 24 hours' notice: no automatic refund.
-- A customer may submit a late cancellation request for manager review/exception handling; the system must not automatically issue a refund in this case.
+- A customer may submit a late cancellation request for manager review/exception handling; the system must not automatically issue a refund in this case. Any approved exception is refunded through Stripe.
 - Explain the applicable policy and expected refund before the customer confirms cancellation.
 - Do not cancel jobs already completed or already in progress through the ordinary customer cancellation action.
 - Record cancellation reason, actor, timestamp, policy applied, refund decision and provider refund reference.
@@ -313,13 +313,16 @@ If the company must change or cancel an appointment:
 
 ### 9.1 Live progress
 
-Show a customer-friendly progress timeline based on authoritative backend status changes. At minimum map the relevant operational states to:
+Show a customer-friendly timeline based on authoritative backend events. Show the booking/payment stages before the cleaner's operational stages. At minimum map the relevant states to:
 
-1. Booking confirmed
-2. Cleaner assigned
-3. Cleaner on the way
-4. Cleaning started
-5. Cleaning completed
+1. Payment received — awaiting manager approval
+2. Booking confirmed (after manager approval)
+3. Cleaner assigned
+4. Cleaner accepted (optional customer-facing detail)
+5. Cleaner on the way
+6. Cleaner arrived (optional customer-facing detail)
+7. Cleaning started
+8. Cleaning completed
 
 The timeline must update automatically without requiring a page refresh. Use an appropriate real-time mechanism (WebSocket, Server-Sent Events or another maintainable option) and provide a polling/reconnect fallback. Do not invent live location tracking if the backend/device does not provide it.
 
@@ -786,3 +789,14 @@ These rules are mandatory:
 ## 15. First-release payment policy clarification
 
 Stripe is the sole payment provider for the first release. Customers pay through Stripe checkout/payment flows before booking confirmation. Only verified Stripe events/session results can mark a payment successful. Do not support cash, bank transfer, manual/off-platform payment collection, or a second provider. Refunds must be initiated through Stripe and their provider-confirmed status must be reflected separately from booking status. Managers may review Stripe transactions and authorised refund outcomes; staff cannot view sensitive payment details, initiate refunds, or alter payment status. This policy overrides any older cash-payment wording elsewhere in the repository or earlier specifications.
+
+
+## Cross-dashboard lifecycle clarification
+
+The authoritative cross-dashboard workflow is defined in `CROSS_DASHBOARD_INTEGRATION.md`. In particular:
+
+- A verified Stripe payment moves the booking to `PENDING_REVIEW`; it does not automatically confirm the appointment.
+- The manager must approve the paid booking within 24 hours. Approval moves it to `CONFIRMED`.
+- If the manager rejects the booking or the 24-hour review deadline expires, the booking is rejected and a full Stripe refund is initiated. The customer is told the refund is processing; the dashboard must not claim it is complete until Stripe confirms it.
+- Cleaner assignment is made only after manager approval. Cleaner acceptance is a separate assignment state and does not change the booking's confirmed state.
+- Booking lifecycle, payment lifecycle, assignment lifecycle, job progress and temporary slot reservation are independent state dimensions.
