@@ -553,6 +553,12 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 from app.routes.auth import router as auth_router
 app.include_router(auth_router)
+from app.routes.services import router as services_router
+app.include_router(services_router)
+from app.routes.bookings import router as bookings_router
+app.include_router(bookings_router)
+from app.routes.staff import router as staff_router
+app.include_router(staff_router)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
 
@@ -970,14 +976,14 @@ def demo_switch_role(role: str = Body(..., embed=True)):
 # ==========================================================
 # 2. SERVICES & DYNAMIC PRICING ENGINE
 # ==========================================================
-@app.get("/api/services", tags=["Services & Quotes"])
+# Legacy implementation retained temporarily for compatibility.
 def list_services():
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SELECT * FROM services WHERE is_active = TRUE ORDER BY id ASC")
             return {"services": cursor.fetchall()}
 
-@app.post("/api/pricing/calculate", tags=["Services & Quotes"])
+# Legacy implementation retained temporarily for compatibility.
 @limiter.limit("30/minute")
 def calculate_quote(request: Request, payload: QuoteRequestSchema):
     """
@@ -1038,7 +1044,7 @@ def _compute_quote(payload: QuoteRequestSchema) -> dict:
 # ==========================================================
 # 3. BOOKINGS (CUSTOMER)
 # ==========================================================
-@app.post("/api/bookings", tags=["Bookings"])
+# Legacy implementation retained temporarily for compatibility.
 def create_booking(
     payload: BookingCreateSchema,
     request: Request,
@@ -1184,7 +1190,7 @@ def create_booking(
                 "idempotent_replayed": False
             }
 
-@app.get("/api/bookings/my", tags=["Bookings"])
+# Legacy implementation retained temporarily for compatibility.
 def get_my_bookings(user: dict = Depends(require_role(["customer"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1206,7 +1212,7 @@ def get_my_bookings(user: dict = Depends(require_role(["customer"]))):
                 b["access_notes"] = decrypt_sensitive_data(b.get("access_notes"))
             return {"bookings": bookings}
 
-@app.post("/api/bookings/{booking_id}/cancel", tags=["Bookings"])
+# Legacy implementation retained temporarily for compatibility.
 def cancel_booking(
     booking_id: int,
     payload: Optional[CancelBookingSchema] = None,
@@ -1338,7 +1344,7 @@ def cancel_booking(
                 "policy_note": policy_note
             }
 
-@app.post("/api/bookings/{booking_id}/reschedule", tags=["Bookings"])
+# Legacy implementation retained temporarily for compatibility.
 def reschedule_booking(
     booking_id: int,
     payload: RescheduleBookingSchema,
@@ -1421,7 +1427,7 @@ def reschedule_booking(
                 "cleaner_assigned": staff_id is not None
             }
 
-@app.post("/api/bookings/{booking_id}/review", tags=["Bookings"])
+# Legacy implementation retained temporarily for compatibility.
 def review_booking(booking_id: int, payload: ReviewCreateSchema, user: dict = Depends(require_role(["customer"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1461,7 +1467,7 @@ def review_booking(booking_id: int, payload: ReviewCreateSchema, user: dict = De
 # ==========================================================
 # 4. STAFF / CLEANER WORKFLOW
 # ==========================================================
-@app.get("/api/staff/jobs", tags=["Staff"])
+# Legacy implementation retained temporarily for compatibility.
 def get_staff_jobs(user: dict = Depends(require_role(["staff"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1479,7 +1485,7 @@ def get_staff_jobs(user: dict = Depends(require_role(["staff"]))):
                 job["access_notes"] = mask_access_notes_for_staff(job["status"], job.get("access_notes"))
             return {"jobs": jobs}
 
-@app.patch("/api/staff/jobs/{booking_id}/status", tags=["Staff"])
+# Legacy implementation retained temporarily for compatibility.
 def update_job_status(booking_id: int, payload: StatusUpdateSchema, user: dict = Depends(require_role(["staff", "manager"]))):
     """
     Sequential State Machine:
@@ -1590,7 +1596,7 @@ def update_job_status(booking_id: int, payload: StatusUpdateSchema, user: dict =
             }
 
 
-@app.get("/api/staff/schedule", tags=["Staff"])
+# Legacy implementation retained temporarily for compatibility.
 def get_staff_schedule(user: dict = Depends(require_role(["staff"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1611,7 +1617,7 @@ def get_staff_schedule(user: dict = Depends(require_role(["staff"]))):
             return {"weekly_availability": weekly, "holidays": holidays}
 
 
-@app.put("/api/staff/schedule", tags=["Staff"])
+# Legacy implementation retained temporarily for compatibility.
 def update_staff_schedule(
     schedule: List[WeeklyAvailabilitySchema],
     user: dict = Depends(require_role(["staff"])),
@@ -1635,7 +1641,7 @@ def update_staff_schedule(
             return {"message": "Weekly availability saved", "days_configured": len(schedule)}
 
 
-@app.post("/api/staff/holidays", tags=["Staff"])
+# Legacy implementation retained temporarily for compatibility.
 def add_staff_holiday(payload: HolidaySchema, user: dict = Depends(require_role(["staff"]))):
     try:
         datetime.date.fromisoformat(payload.holiday_date)
@@ -1651,7 +1657,7 @@ def add_staff_holiday(payload: HolidaySchema, user: dict = Depends(require_role(
             return {"message": "Holiday saved", "holiday_date": payload.holiday_date}
 
 
-@app.delete("/api/staff/holidays/{holiday_date}", tags=["Staff"])
+# Legacy implementation retained temporarily for compatibility.
 def remove_staff_holiday(holiday_date: str, user: dict = Depends(require_role(["staff"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1662,7 +1668,7 @@ def remove_staff_holiday(holiday_date: str, user: dict = Depends(require_role(["
             return {"message": "Holiday removed", "holiday_date": holiday_date}
 
 
-@app.get("/api/staff/earnings", tags=["Staff"])
+# Legacy implementation retained temporarily for compatibility.
 def get_staff_earnings(user: dict = Depends(require_role(["staff"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:

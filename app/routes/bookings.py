@@ -24,7 +24,7 @@ from app.services.booking import (
 router = APIRouter(prefix="/api/bookings", tags=["Bookings"])
 
 
-@router.post("", status_code=status.HTTP_201_CREATED)
+@router.post("", status_code=status.HTTP_200_OK)
 @limiter.limit("20/minute")
 def create_booking_route(
     request: Request,
@@ -42,7 +42,7 @@ def list_my_bookings(user: dict = Depends(require_role(["customer"]))):
     return get_my_bookings(user["id"])
 
 
-@router.patch("/{booking_id}/cancel")
+@router.post("/{booking_id}/cancel")
 def cancel_booking_route(
     booking_id: int,
     payload: Optional[CancelBookingSchema] = Body(None),
