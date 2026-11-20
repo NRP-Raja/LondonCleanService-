@@ -28,3 +28,35 @@ class ShiftCreateSchema(BaseModel):
 class SettingsUpdateSchema(BaseModel):
     key: str
     value: str
+
+
+class PaymentRecordSchema(BaseModel):
+    booking_id: int
+    amount_gbp: float = Field(..., gt=0)
+    method: str = Field(..., pattern="^(CASH|CARD|BANK_TRANSFER|REFUND|OTHER)$")
+    reference: Optional[str] = None
+
+
+class SupportCaseSchema(BaseModel):
+    booking_id: Optional[int] = None
+    customer_id: int
+    subject: str = Field(..., min_length=3, max_length=160)
+    description: str = Field(..., min_length=3, max_length=5000)
+
+
+class SupportCaseUpdateSchema(BaseModel):
+    status: str = Field(..., pattern="^(OPEN|IN_PROGRESS|RESOLVED)$")
+    assigned_to: Optional[int] = None
+    outcome: Optional[str] = None
+    follow_up_at: Optional[str] = None
+
+
+class StaffShiftSchema(BaseModel):
+    staff_id: int
+    shift_date: str
+    start_time: str
+    end_time: str
+
+
+class TimeOffReviewSchema(BaseModel):
+    status: str = Field(..., pattern="^(APPROVED|REJECTED)$")

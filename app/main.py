@@ -1802,7 +1802,7 @@ def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
                 "status_breakdown": counts
             }
 
-@app.get("/api/manager/payments", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def list_payment_records(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1814,7 +1814,7 @@ def list_payment_records(user: dict = Depends(require_role(["manager"]))):
             """)
             return {"payments": cursor.fetchall()}
 
-@app.post("/api/manager/payments", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def record_payment(payload: PaymentRecordSchema, user: dict = Depends(require_role(["manager"]))):
     with get_transaction() as conn:
         with conn.cursor() as cursor:
@@ -1832,7 +1832,7 @@ def record_payment(payload: PaymentRecordSchema, user: dict = Depends(require_ro
                                "method": payload.method})
             return {"message": "Payment recorded", "payment_id": record_id}
 
-@app.patch("/api/manager/payments/{payment_id}/verify", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def verify_payment(payment_id: int, user: dict = Depends(require_role(["manager"]))):
     with get_transaction() as conn:
         with conn.cursor() as cursor:
@@ -1849,7 +1849,7 @@ def verify_payment(payment_id: int, user: dict = Depends(require_role(["manager"
                          before=payment, after={"status": "VERIFIED"})
             return {"message": "Payment verified", "payment_id": payment_id}
 
-@app.get("/api/manager/support", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def list_support_cases(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1862,7 +1862,7 @@ def list_support_cases(user: dict = Depends(require_role(["manager"]))):
             """)
             return {"cases": cursor.fetchall()}
 
-@app.post("/api/manager/support", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def create_support_case(payload: SupportCaseSchema, user: dict = Depends(require_role(["manager"]))):
     with get_transaction() as conn:
         with conn.cursor() as cursor:
@@ -1875,7 +1875,7 @@ def create_support_case(payload: SupportCaseSchema, user: dict = Depends(require
                          after={"customer_id": payload.customer_id, "subject": payload.subject})
             return {"message": "Support case created", "case_id": case_id}
 
-@app.patch("/api/manager/support/{case_id}", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def update_support_case(case_id: int, payload: SupportCaseUpdateSchema,
                         user: dict = Depends(require_role(["manager"]))):
     with get_transaction() as conn:
@@ -1897,7 +1897,7 @@ def update_support_case(case_id: int, payload: SupportCaseUpdateSchema,
                                                "outcome": payload.outcome})
             return {"message": "Support case updated", "case_id": case_id}
 
-@app.get("/api/manager/notifications", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def list_manager_notifications(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1911,7 +1911,7 @@ def list_manager_notifications(user: dict = Depends(require_role(["manager"]))):
             unread = sum(1 for item in notifications if not item["is_read"])
             return {"notifications": notifications, "unread_count": unread}
 
-@app.patch("/api/manager/notifications/{notification_id}/read", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def mark_notification_read(notification_id: int, user: dict = Depends(require_role(["manager"]))):
     with get_transaction() as conn:
         with conn.cursor() as cursor:
@@ -1924,7 +1924,7 @@ def mark_notification_read(notification_id: int, user: dict = Depends(require_ro
             log_activity(cursor, user, "notification_read", "notification", notification_id)
             return {"message": "Notification marked as read"}
 
-@app.get("/api/manager/audit", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def list_audit_log(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1934,7 +1934,7 @@ def list_audit_log(user: dict = Depends(require_role(["manager"]))):
             """)
             return {"audit": cursor.fetchall()}
 
-@app.get("/api/manager/shifts", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def list_shifts(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1946,7 +1946,7 @@ def list_shifts(user: dict = Depends(require_role(["manager"]))):
             """)
             return {"shifts": cursor.fetchall()}
 
-@app.post("/api/manager/shifts", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def create_shift(payload: StaffShiftSchema, user: dict = Depends(require_role(["manager"]))):
     with get_transaction() as conn:
         with conn.cursor() as cursor:
@@ -1962,7 +1962,7 @@ def create_shift(payload: StaffShiftSchema, user: dict = Depends(require_role(["
                                "start_time": payload.start_time, "end_time": payload.end_time})
             return {"message": "Shift created", "shift_id": shift_id}
 
-@app.get("/api/manager/time-off", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def list_time_off(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -1974,7 +1974,7 @@ def list_time_off(user: dict = Depends(require_role(["manager"]))):
             """)
             return {"time_off": cursor.fetchall()}
 
-@app.patch("/api/manager/time-off/{time_off_id}", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def review_time_off(time_off_id: int, payload: TimeOffReviewSchema,
                     user: dict = Depends(require_role(["manager"]))):
     with get_transaction() as conn:
@@ -1992,14 +1992,14 @@ def review_time_off(time_off_id: int, payload: TimeOffReviewSchema,
                          before=before, after={"status": payload.status})
             return {"message": "Time-off request reviewed", "time_off_id": time_off_id}
 
-@app.get("/api/manager/settings", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def get_settings(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
             cursor.execute("SELECT setting_key, setting_value, updated_at FROM business_settings")
             return {"settings": cursor.fetchall()}
 
-@app.put("/api/manager/settings/{setting_key}", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def update_setting(setting_key: str, payload: dict,
                    user: dict = Depends(require_role(["manager"]))):
     if not setting_key or len(setting_key) > 100:
@@ -2018,7 +2018,7 @@ def update_setting(setting_key: str, payload: dict,
                          after=payload)
             return {"message": "Setting updated", "setting_key": setting_key}
 
-@app.get("/api/manager/reports/summary", tags=["Manager"])
+# Legacy manager implementation retained temporarily for compatibility.
 def manager_report_summary(start_date: str, end_date: str,
                            user: dict = Depends(require_role(["manager"]))):
     try:

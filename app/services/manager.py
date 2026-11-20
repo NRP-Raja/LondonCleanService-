@@ -1,6 +1,7 @@
 """CleanLondon Manager Service — business logic for manager/dashboard operations."""
 
 import datetime
+import json
 import random
 import re
 from typing import Optional, List
@@ -12,6 +13,25 @@ from app.database.connection import get_db, get_transaction
 from app.utils.notifications import queue_notification
 from app.utils.postcode import resolve_postcode_coords, haversine_distance_miles
 from app.services.staff import check_cleaner_schedule_conflict, check_staff_availability
+
+
+def log_activity(cursor, user: dict, action: str, entity_type: str, entity_id, before=None, after=None) -> None:
+    cursor.execute(
+        """
+        INSERT INTO activity_audit_log
+            (actor_id, actor_role, action, entity_type, entity_id, before_json, after_json)
+        VALUES (%s, %s, %s, %s, %s, %s, %s)
+        """,
+        (
+            user.get("id"),
+            user.get("role"),
+            action,
+            entity_type,
+            str(entity_id),
+            json.dumps(before, default=str) if before is not None else None,
+            json.dumps(after, default=str) if after is not None else None,
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -486,6 +506,295 @@ def update_setting(setting_key: str, value: str) -> dict:
                 (f"{setting_key}: {value}",),
             )
             return {"message": "Setting updated", "setting_key": setting_key}
+
+
+def list_payment_records() -> dict:
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT p.*, b.reference_code
+                FROM payment_records p
+                JOIN bookings b ON b.id = p.booking_id
+                ORDER BY p.recorded_at DESC
+                """
+            )
+            return {"payments": cursor.fetchall()}
+
+
+def record_payment(booking_id: int, amount_gbp: float, method: str, reference: Optional[str], user: dict) -> dict:
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT id FROM bookings WHERE id = %s FOR UPDATE", (booking_id,))
+            if not cursor.fetchone():
+                raise HTTPException(status_code=404, detail="Booking not found")
+            cursor.execute(
+                """
+                INSERT INTO payment_records
+                    (booking_id, amount_gbp, method, status, reference, recorded_by)
+                VALUES (%s, %s, %s, 'RECORDED', %s, %s)
+                """,
+                (booking_id, amount_gbp, method, reference, user["id"]),
+            )
+            record_id = cursor.lastrowid
+            log_activity(
+                cursor,
+                user,
+                "payment_recorded",
+                "payment",
+                record_id,
+                after={"booking_id": booking_id, "amount_gbp": amount_gbp, "method": method},
+            )
+            return {"message": "Payment recorded", "payment_id": record_id}
+
+
+def verify_payment(payment_id: int, user: dict) -> dict:
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM payment_records WHERE id = %s FOR UPDATE", (payment_id,))
+            payment = cursor.fetchone()
+            if not payment:
+                raise HTTPException(status_code=404, detail="Payment not found")
+            cursor.execute(
+                """
+                UPDATE payment_records
+                SET status = 'VERIFIED', verified_by = %s, verified_at = NOW()
+                WHERE id = %s
+                """,
+                (user["id"], payment_id),
+            )
+            log_activity(cursor, user, "payment_verified", "payment", payment_id, before=payment, after={"status": "VERIFIED"})
+            return {"message": "Payment verified", "payment_id": payment_id}
+
+
+def list_support_cases() -> dict:
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT sc.*, c.full_name AS customer_name, cl.full_name AS assigned_name
+                FROM support_cases sc
+                JOIN users c ON c.id = sc.customer_id
+                LEFT JOIN users cl ON cl.id = sc.assigned_to
+                ORDER BY sc.created_at DESC
+                """
+            )
+            return {"cases": cursor.fetchall()}
+
+
+def create_support_case(payload, user: dict) -> dict:
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO support_cases (booking_id, customer_id, subject, description)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (payload.booking_id, payload.customer_id, payload.subject, payload.description),
+            )
+            case_id = cursor.lastrowid
+            log_activity(
+                cursor,
+                user,
+                "support_case_created",
+                "support_case",
+                case_id,
+                after={"customer_id": payload.customer_id, "subject": payload.subject},
+            )
+            return {"message": "Support case created", "case_id": case_id}
+
+
+def update_support_case(case_id: int, payload, user: dict) -> dict:
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM support_cases WHERE id = %s FOR UPDATE", (case_id,))
+            before = cursor.fetchone()
+            if not before:
+                raise HTTPException(status_code=404, detail="Support case not found")
+            cursor.execute(
+                """
+                UPDATE support_cases
+                SET status = %s, assigned_to = %s, outcome = %s, follow_up_at = %s
+                WHERE id = %s
+                """,
+                (payload.status, payload.assigned_to, payload.outcome, payload.follow_up_at, case_id),
+            )
+            log_activity(
+                cursor,
+                user,
+                "support_case_updated",
+                "support_case",
+                case_id,
+                before=before,
+                after={"status": payload.status, "assigned_to": payload.assigned_to, "outcome": payload.outcome},
+            )
+            return {"message": "Support case updated", "case_id": case_id}
+
+
+def list_manager_notifications(user: dict) -> dict:
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT id, subject, body, status, is_read, priority, deep_link, created_at
+                FROM notification_outbox
+                WHERE recipient_user_id = %s OR recipient_user_id IS NULL
+                ORDER BY created_at DESC LIMIT 100
+                """,
+                (user["id"],),
+            )
+            notifications = cursor.fetchall()
+            unread = sum(1 for item in notifications if not item["is_read"])
+            return {"notifications": notifications, "unread_count": unread}
+
+
+def mark_notification_read(notification_id: int, user: dict) -> dict:
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                UPDATE notification_outbox SET is_read = TRUE
+                WHERE id = %s AND (recipient_user_id = %s OR recipient_user_id IS NULL)
+                """,
+                (notification_id, user["id"]),
+            )
+            if cursor.rowcount == 0:
+                raise HTTPException(status_code=404, detail="Notification not found")
+            log_activity(cursor, user, "notification_read", "notification", notification_id)
+            return {"message": "Notification marked as read"}
+
+
+def list_audit_log() -> dict:
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM activity_audit_log ORDER BY created_at DESC LIMIT 200")
+            return {"audit": cursor.fetchall()}
+
+
+def list_shifts() -> dict:
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT ss.*, u.full_name AS staff_name
+                FROM staff_shifts ss
+                JOIN users u ON u.id = ss.staff_id
+                ORDER BY ss.shift_date, ss.start_time
+                """
+            )
+            return {"shifts": cursor.fetchall()}
+
+
+def create_admin_shift(payload, user: dict) -> dict:
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO staff_shifts
+                    (staff_id, shift_date, start_time, end_time, created_by)
+                VALUES (%s, %s, %s, %s, %s)
+                """,
+                (payload.staff_id, payload.shift_date, payload.start_time, payload.end_time, user["id"]),
+            )
+            shift_id = cursor.lastrowid
+            log_activity(
+                cursor,
+                user,
+                "shift_created",
+                "shift",
+                shift_id,
+                after={"staff_id": payload.staff_id, "shift_date": payload.shift_date, "start_time": payload.start_time, "end_time": payload.end_time},
+            )
+            return {"message": "Shift created", "shift_id": shift_id}
+
+
+def list_time_off() -> dict:
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT t.*, u.full_name AS staff_name
+                FROM staff_time_off t
+                JOIN users u ON u.id = t.staff_id
+                ORDER BY t.created_at DESC
+                """
+            )
+            return {"time_off": cursor.fetchall()}
+
+
+def review_time_off(time_off_id: int, payload, user: dict) -> dict:
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT * FROM staff_time_off WHERE id = %s FOR UPDATE", (time_off_id,))
+            before = cursor.fetchone()
+            if not before:
+                raise HTTPException(status_code=404, detail="Time-off request not found")
+            cursor.execute(
+                "UPDATE staff_time_off SET status = %s, reviewed_by = %s, reviewed_at = NOW() WHERE id = %s",
+                (payload.status, user["id"], time_off_id),
+            )
+            log_activity(cursor, user, "time_off_reviewed", "time_off", time_off_id, before=before, after={"status": payload.status})
+            return {"message": "Time-off request reviewed", "time_off_id": time_off_id}
+
+
+def update_manager_setting(setting_key: str, payload: dict, user: dict) -> dict:
+    if not setting_key or len(setting_key) > 100:
+        raise HTTPException(status_code=400, detail="Invalid setting key")
+    if not payload:
+        raise HTTPException(status_code=400, detail="Setting value is required")
+    with get_transaction() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                INSERT INTO business_settings (setting_key, setting_value, updated_by)
+                VALUES (%s, %s, %s)
+                ON DUPLICATE KEY UPDATE setting_value = VALUES(setting_value),
+                                        updated_by = VALUES(updated_by)
+                """,
+                (setting_key, json.dumps(payload), user["id"]),
+            )
+            log_activity(cursor, user, "setting_updated", "business_setting", setting_key, after=payload)
+            return {"message": "Setting updated", "setting_key": setting_key}
+
+
+def manager_report_summary(start_date: str, end_date: str) -> dict:
+    try:
+        datetime.date.fromisoformat(start_date)
+        datetime.date.fromisoformat(end_date)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid date range")
+    if end_date < start_date:
+        raise HTTPException(status_code=400, detail="End date must not precede start date")
+    with get_db() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                """
+                SELECT
+                    COUNT(*) AS booking_count,
+                    COALESCE(SUM(CASE WHEN status != 'CANCELLED' THEN total_price_gbp ELSE 0 END), 0) AS booking_value,
+                    COALESCE(SUM(CASE WHEN payment_status = 'PAID' THEN total_price_gbp ELSE 0 END), 0) AS collected_payments,
+                    COALESCE(SUM(CASE WHEN payment_status IN ('PENDING','AUTHORIZED') AND status != 'CANCELLED' THEN total_price_gbp ELSE 0 END), 0) AS outstanding
+                FROM bookings
+                WHERE scheduled_date BETWEEN %s AND %s
+                """,
+                (start_date, end_date),
+            )
+            booking_totals = cursor.fetchone()
+            cursor.execute(
+                "SELECT COALESCE(SUM(amount_gbp), 0) AS expenses FROM expenses WHERE expense_date BETWEEN %s AND %s",
+                (start_date, end_date),
+            )
+            expense_totals = cursor.fetchone()
+            return {
+                "date_range": {"start": start_date, "end": end_date},
+                "booking_count": booking_totals["booking_count"] or 0,
+                "booking_value_gbp": float(booking_totals["booking_value"] or 0),
+                "collected_payments_gbp": float(booking_totals["collected_payments"] or 0),
+                "outstanding_gbp": float(booking_totals["outstanding"] or 0),
+                "expenses_gbp": float(expense_totals["expenses"] or 0),
+                "profit_gbp": None,
+                "profit_note": "Profit is not reported until a complete expense model is verified.",
+            }
 
 
 
