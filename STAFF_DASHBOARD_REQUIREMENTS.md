@@ -519,3 +519,8 @@ The staff dashboard is not complete until all applicable checks pass:
 ---
 
 **Definition of done:** a cleaner can securely accept and complete only their assigned jobs, record accurate progress and completion evidence, communicate through the correct booking conversation and view their own schedule—while the manager remains in control and customers see consistent updates from the same underlying booking.
+
+
+## First-release payment boundary — Stripe only
+
+The first release uses Stripe as the sole payment provider. Customers complete payment through the secure Stripe flow; booking confirmation requires trusted server-side Stripe verification. **Staff do not collect cash, record cash received, accept bank transfers, process payments, issue refunds, or edit payment status.** Staff may see only the minimum customer-safe payment state needed to understand the assigned job (for example, whether the booking is confirmed/paid if operationally necessary). They must not see card data, full payment credentials, Stripe secrets, or manager-only financial records. Job completion must never mark a payment as paid. Payment state is updated only by verified Stripe events and authorised manager refund/reconciliation workflows. This policy overrides any legacy cash-handling behaviour in the codebase.
