@@ -565,6 +565,8 @@ from app.routes.notifications import router as notifications_router
 app.include_router(notifications_router)
 from app.routes.location import router as location_router
 app.include_router(location_router)
+from app.routes.payments import router as payments_router
+app.include_router(payments_router)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
 
@@ -2367,7 +2369,7 @@ def calculate_distance(payload: DistanceRequestSchema):
 # ==========================================================
 # 7. STRIPE PAYMENT GATEWAY & WEBHOOKS
 # ==========================================================
-@app.post("/api/payments/create-checkout-session", tags=["Payments"])
+# Legacy payment implementation retained temporarily for compatibility.
 def create_checkout_session(
     payload: CreateCheckoutSessionSchema,
     request: Request,
@@ -2476,7 +2478,7 @@ def create_checkout_session(
                 "is_mock": is_mock_stripe
             }
 
-@app.post("/api/payments/webhook", tags=["Payments"])
+# Legacy payment implementation retained temporarily for compatibility.
 async def stripe_webhook(request: Request):
     """
     Secure Stripe Webhook Listener:
@@ -2580,7 +2582,7 @@ def _fulfill_stripe_payment(booking_id: int, session_id: Optional[str], payment_
                 "payment_intent": payment_intent_id,
             }
 
-@app.get("/api/payments/session/{session_id}/verify", tags=["Payments"])
+# Legacy payment implementation retained temporarily for compatibility.
 def verify_payment_session(session_id: str, booking_id: Optional[int] = None):
     """
     Verification endpoint called by success.html to verify fulfillment
