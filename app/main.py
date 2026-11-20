@@ -561,6 +561,10 @@ from app.routes.staff import router as staff_router
 app.include_router(staff_router)
 from app.routes.manager import router as manager_router
 app.include_router(manager_router)
+from app.routes.notifications import router as notifications_router
+app.include_router(notifications_router)
+from app.routes.location import router as location_router
+app.include_router(location_router)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
 
@@ -1695,7 +1699,7 @@ def get_staff_earnings(user: dict = Depends(require_role(["staff"]))):
             }
 
 
-@app.get("/api/notifications/my", tags=["Notifications"])
+# Legacy notification implementation retained temporarily for compatibility.
 def get_my_notifications(user: dict = Depends(get_current_user)):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -2318,7 +2322,7 @@ class DistanceRequestSchema(BaseModel):
     origin_postcode: str
     destination_postcode: str
 
-@app.post("/api/maps/geocode", tags=["Location & Maps"])
+# Legacy location implementation retained temporarily for compatibility.
 def geocode_london_postcode(payload: GeocodeRequestSchema):
     """
     Geocodes a UK London postcode. In Mock mode, uses curated
@@ -2337,7 +2341,7 @@ def geocode_london_postcode(payload: GeocodeRequestSchema):
         "formatted_address": f"{payload.postcode.upper()}, London, United Kingdom"
     }
 
-@app.post("/api/maps/distance", tags=["Location & Maps"])
+# Legacy location implementation retained temporarily for compatibility.
 def calculate_distance(payload: DistanceRequestSchema):
     """
     Computes transit/driving distance between two London points.
