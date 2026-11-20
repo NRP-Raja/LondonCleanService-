@@ -559,6 +559,8 @@ from app.routes.bookings import router as bookings_router
 app.include_router(bookings_router)
 from app.routes.staff import router as staff_router
 app.include_router(staff_router)
+from app.routes.manager import router as manager_router
+app.include_router(manager_router)
 
 ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:8000,http://127.0.0.1:8000").split(",")
 
@@ -1708,7 +1710,7 @@ def get_my_notifications(user: dict = Depends(get_current_user)):
 # ==========================================================
 # 5. MANAGER / ADMIN DASHBOARD & DISPATCH
 # ==========================================================
-@app.get("/api/manager/dashboard-stats", tags=["Manager"])
+# Legacy implementation retained temporarily for compatibility.
 def get_manager_kpis(user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -2053,7 +2055,7 @@ def manager_report_summary(start_date: str, end_date: str,
                 "profit_note": "Profit is not reported until a complete expense model is verified.",
             }
 
-@app.get("/api/manager/bookings", tags=["Manager"])
+# Legacy implementation retained temporarily for compatibility.
 def get_all_bookings(status_filter: Optional[str] = None, user: dict = Depends(require_role(["manager"]))):
     with get_db() as conn:
         with conn.cursor() as cursor:
@@ -2078,7 +2080,7 @@ def get_all_bookings(status_filter: Optional[str] = None, user: dict = Depends(r
                 b["access_notes"] = decrypt_sensitive_data(b.get("access_notes"))
             return {"bookings": bookings}
 
-@app.get("/api/manager/staff", tags=["Manager"])
+# Legacy implementation retained temporarily for compatibility.
 def list_available_staff(
     postcode: Optional[str] = None,
     scheduled_date: Optional[str] = None,
@@ -2116,7 +2118,7 @@ def list_available_staff(
             return {"staff": staff}
 
 
-@app.patch("/api/manager/staff/{staff_id}/vetting", tags=["Manager"])
+# Legacy implementation retained temporarily for compatibility.
 def update_staff_vetting(
     staff_id: int,
     payload: VettingSchema,
@@ -2154,7 +2156,7 @@ def update_staff_vetting(
                 "is_active": approved,
             }
 
-@app.post("/api/manager/bookings/{booking_id}/assign", tags=["Manager"])
+# Legacy implementation retained temporarily for compatibility.
 def assign_staff_to_booking(booking_id: int, payload: AssignStaffSchema, user: dict = Depends(require_role(["manager"]))):
     with get_transaction() as conn:
         with conn.cursor() as cursor:
@@ -2202,12 +2204,12 @@ def assign_staff_to_booking(booking_id: int, payload: AssignStaffSchema, user: d
             return {"message": f"Successfully assigned booking to {staff['full_name']}"}
 
 
-@app.post("/api/manager/bookings/{booking_id}/reassign", tags=["Manager"])
+# Legacy implementation retained temporarily for compatibility.
 def reassign_cleaner(booking_id: int, payload: AssignStaffSchema, user: dict = Depends(require_role(["manager"]))):
     """Explicit reassignment workflow used when the scheduled cleaner cancels."""
     return assign_staff_to_booking(booking_id, payload, user)
 
-@app.post("/api/manager/bookings/{booking_id}/auto-match", tags=["Manager"])
+# Legacy implementation retained temporarily for compatibility.
 def auto_match_cleaner(booking_id: int, user: dict = Depends(require_role(["manager"]))):
     """
     Intelligent Proximity-Based Auto-Dispatch Algorithm:
