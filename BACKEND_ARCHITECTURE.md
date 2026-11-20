@@ -2,16 +2,16 @@
 
 ## Runtime Entry Points
 
-- `app/main.py` creates the FastAPI application, shared middleware/configuration, operational startup migration, static frontend mount, and still owns endpoints not yet extracted.
+- `app/main.py` is a lightweight FastAPI composition entry point: application setup, CORS/security middleware, route inclusion, startup migration invocation, static frontend mount, and homepage.
 - `main.py` remains a compatibility entry point that imports `app.main`.
 
 ## Modular Layout
 
 - `app/core/` contains configuration, authentication dependencies, security helpers, and middleware.
-- `app/database/` owns MySQL connection pooling and transaction context managers.
-- `app/routes/` owns HTTP route definitions for auth, services, bookings, staff, and the dispatch subset of manager operations.
-- `app/services/` owns authentication, booking, pricing, staff, and manager business logic.
-- `app/schemas/` contains Pydantic request models for modular route inputs.
+- `app/database/` owns MySQL connection pooling, transactions, and additive operational migrations.
+- `app/routes/` owns HTTP route definitions for auth, services, bookings, staff, manager administration/dispatch, notifications, location, and payments.
+- `app/services/` owns authentication, booking, pricing, staff, manager, notification, location, and payment business logic.
+- `app/schemas/` contains Pydantic request models for modular route inputs, including location and payments.
 - `app/utils/` contains encryption, notification, and postcode/geolocation helpers.
 
 ## Active Modular Routes
@@ -23,7 +23,10 @@ The following route groups are registered from `app/routes/`:
 - `/api/pricing/calculate`
 - `/api/bookings/*`
 - `/api/staff/*`
-- Manager dashboard, booking, staff-vetting, assignment, reassignment, and auto-match routes under `/api/manager/*`
+- `/api/notifications/*`
+- `/api/maps/*`
+- `/api/payments/*`
+- Manager dashboard, bookings, staff-vetting, assignment, reassignment, auto-match, payments, support, shifts, time-off, settings, notifications, audit, and reports under `/api/manager/*`
 
 The modular route implementations preserve the existing authentication, role checks, idempotency, booking cancellation/reschedule behavior, staff state transitions, and dispatch conflict rules.
 
@@ -33,11 +36,13 @@ Database access uses `app/database/connection.py`. Transactions, connection pool
 
 Sensitive access notes continue to use the encryption utility and staff visibility masking logic.
 
-## Remaining Monolith Areas
+## Payments and Webhooks
 
-`app/main.py` still contains legacy implementations for notifications, additional manager administration endpoints, maps/geocoding, and Stripe checkout/webhook operations. Those endpoints remain active and have not been duplicated: they are registered directly by the existing FastAPI application.
+Stripe checkout creation, mock/live session behavior, session verification, webhook parsing, signature verification, and payment fulfillment are implemented in `app/services/payments.py` and exposed through `app/routes/payments.py`. Production webhook handling requires a valid Stripe signature and configured webhook secret. The mock development handler preserves the existing JSON payload fallback.
 
-The remaining cleanup work is to move those route groups into dedicated routers and service modules, then remove their legacy implementations only after route-schema and integration verification.
+## Operational Startup
+
+Additive table and column migrations are implemented in `app/database/migrations.py`. `app/main.py` invokes `ensure_operational_schema()` on startup.
 
 ## Validation
 

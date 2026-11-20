@@ -19,7 +19,7 @@ if not _DATA_ENCRYPTION_KEY:
     derived = hashlib.sha256(JWT_SECRET_KEY.encode("utf-8")).digest()
     _DATA_ENCRYPTION_KEY = base64.urlsafe_b64encode(derived).decode("utf-8")
 
-_cipher_suite = Fernet(
+cipher_suite = Fernet(
     _DATA_ENCRYPTION_KEY.encode("utf-8")
     if isinstance(_DATA_ENCRYPTION_KEY, str)
     else _DATA_ENCRYPTION_KEY
@@ -34,7 +34,7 @@ def encrypt_sensitive_data(plaintext: Optional[str]) -> Optional[str]:
     if not plaintext or not plaintext.strip():
         return plaintext
     try:
-        return _cipher_suite.encrypt(plaintext.encode("utf-8")).decode("utf-8")
+        return cipher_suite.encrypt(plaintext.encode("utf-8")).decode("utf-8")
     except Exception as exc:
         raise RuntimeError("Unable to encrypt sensitive access data") from exc
 
@@ -44,7 +44,7 @@ def decrypt_sensitive_data(ciphertext: Optional[str]) -> Optional[str]:
     if not ciphertext or not ciphertext.strip():
         return ciphertext
     try:
-        return _cipher_suite.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
+        return cipher_suite.decrypt(ciphertext.encode("utf-8")).decode("utf-8")
     except (InvalidToken, ValueError, TypeError, UnicodeDecodeError) as exc:
         raise RuntimeError("Stored sensitive access data is not a valid encrypted value") from exc
 
