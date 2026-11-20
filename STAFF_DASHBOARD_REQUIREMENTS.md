@@ -146,7 +146,7 @@ The existing application uses booking status values for both customer booking de
 - **Booking lifecycle:** customer request, approval/confirmation, cancellation/rejection and other customer-facing booking outcomes.
 - **Assignment lifecycle:** assigned, accepted, declined, expired, reassigned.
 - **Job progress:** on the way, arrived, cleaning started, cleaning completed.
-- **Payment lifecycle:** pending, paid, failed, refund pending, refunded or refund failed, based only on verified Stripe/provider events. No cash or manual payment states are supported in the first release.
+- **Payment lifecycle:** requires payment, processing, paid, failed, refund pending, refunded, partially refunded or refund failed, based only on verified Stripe events. No cash or manual payment states are supported in the first release.
 
 Do not solve this by blindly replacing existing enum values or changing every status in one pass. Inspect all existing database constraints, API contracts, frontend conditions, customer timelines, manager filters and tests. Introduce a backward-compatible mapping/migration strategy and update all role views together.
 
